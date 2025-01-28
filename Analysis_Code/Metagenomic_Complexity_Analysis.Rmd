@@ -1,0 +1,4176 @@
+---
+title: "Code to analyse data for Metagenomic Complexity study"
+author: "Mun Hua Tan"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Date: 02/12/2024
+# Input: This code uses files from "input_files" folder
+# Description: This code produces data, tables, and figures found in publication currently under review.
+
+# ENV: Load packages & create general lists/data frames
+```{r message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(scales)
+library(ggsci)
+library(ggpubr)
+library(rstatix)
+library(DescTools)
+library(RColorBrewer)
+library(ggvenn)
+library(ggridges)
+library(pwr)
+library(vegan)
+library(npreg)
+library(Biostrings)
+library(mgcv)
+library(splines)
+
+plotpid <- 96
+setpid <- c(96)
+file_prefix <- "DBS_PilotS1to8_WB_S8MRS"
+
+ups_list <- list("upsA", "non-upsA")
+AgeGroups_list <- list("6-10 Years", "11-20 Years", "21-39 Years", "40+ Years")
+WBvol_list <- list("1uL", "10uL", "50uL", "100uL")
+
+WBvol_pairs_df <- data.frame(pairs=c("1uL & 10uL", "1uL & 50uL", "1uL & 100uL",
+                                     "10uL & 50uL", "10uL & 100uL", "50uL & 100uL"),
+                             volS=c("1uL", "1uL", "1uL", "10uL", "10uL", "50uL"),
+                             volB=c("10uL", "50uL", "100uL", "50uL", "100uL", "100uL"),
+                             volS_label=c("WB1", "WB1", "WB1", "WB10", "WB10", "WB50"),
+                             volB_label=c("WB10", "WB50", "WB100", "WB50", "WB100", "WB100"))
+
+##### Repertoire size threshold
+repsize_thres_nonzero <- 1 # 1 DBLa type
+repsize_thres_popgen <- 20 # 20 DBLa types
+repsize_thres_MOI <- 10 # 10 non-upsA types
+
+##### Color palettes
+palette_upsA <- c("white", brewer.pal(n=9, "Reds")[c(2,5,8)])
+`palette_non-upsA` <- c("white", brewer.pal(n=9, "Blues")[c(2,5,8)])
+```
+
+# ENV: Create output directories
+```{bash}
+mkdir Z01.MAIN.out_RDS # PART 1-9
+mkdir Z01.MAIN.out_RESULTS # PART 1-9
+
+mkdir Z02.FIELD.out_RDS # PART 10-18
+mkdir Z02.FIELD.out_RESULTS # PART 10-18
+
+mkdir Z03.REPEATS.out_RDS # PART 19-23
+mkdir Z03.REPEATS.out_RESULTS # PART 19-23
+
+mkdir Z04.POPULATION.out_RDS # PART 24 onwards
+mkdir Z04.POPULATION.out_RESULTS # PART 24 onwards
+
+mkdir Z05.DATA_OUTPUT_GITHUB
+
+mkdir Z06.IMPACT_MAPS.out_RDS # PART 31 onwards
+mkdir Z06.IMPACT_MAPS.out_RESULTS # PART 31 onwards
+```
+
+# ENV: FUNCTIONS
+pairwiseType --> calculates general PTS from a binary otutable/matrix
+PASmatrixToTable --> saves the general PTS matrix values into a table for analysis purposes
+geneticSimilarity --> calculates directional PTS from a binary otutable/matrix
+GSmatrixToTable --> saves the directional PTS matrix values into a table for analysis purposes
+```{r}
+##### This function calculates the PTS from a binary otutable (input: only isolates in columns, remove DBLa type or other information)
+pairwiseType <- function(x){
+    x <- t(x)
+    mm <- as.matrix(x) #as(x, "dgCMatrix")
+    d <- tcrossprod(mm)
+    denom <- matrix(rep(rowSums(x), ncol(d)), ncol = ncol(d), byrow = FALSE)
+    denom <- denom + t(denom)
+    return(as.matrix(2*d/denom))
+}
+
+##### This function saves the PTS matrix values into a table for analysis purposes.
+PASmatrixToTable <- function(x){
+  diag(x) <- NA
+  x[upper.tri(x)] <- NA
+
+  df <- data.frame(SampleID1 = rownames(x)[row(x)], SampleID2 = colnames(x)[col(x)], PAS_score = c(x))
+  df <- na.omit(df)
+  return(df)
+}
+
+##### This function calculates the Directional PTS from a binary otutable (input: only isolates in columns, remove DBLa type or other information)
+## This function calculates Sij and Sji (i.e., directional PTS) as in He et al 2018.
+geneticSimilarity <- function(mat){
+  mat <- t(mat)
+  newmat <- tcrossprod(mat > 0)
+  newmat <- newmat/rowSums(mat > 0)
+  return(newmat)  
+}
+
+## This function saves the Genetic Similarity matrix values into a table for analysis purposes. Note that there are two GS scores for every isolate pair (i.e. directional PTS)
+GSmatrixToTable <- function(x){
+  diag(x) <- NA
+  df <- data.frame(SampleID1 = rownames(x)[row(x)], SampleID2 = colnames(x)[col(x)], GS_score = c(x))
+  df <- na.omit(df)
+  return(df)
+}
+
+```
+
+# ENV: UNZIP FILES
+```{bash}
+gunzip -1 input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_centroids.fasta.gz
+gunzip -1 input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_otuTable_binary.txt.gz
+unzip input_files/gadm41_GHA_shp.zip -d input_files
+```
+
+# ***** PROCESSING
+# PART 1: Read original files and save as RDS objects
+```{r}
+PART=1
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  ## DBLa type presence/absence file
+  ori_otutable_file <- read.table(paste0("input_files/", file_prefix, ".id", plotpid, ".DBLaTags_cleaned_renamed_otuTable_binary.txt"), header=TRUE, sep="\t", check.names=FALSE, comment.char="")
+  ## DBLa domain classification
+  ori_domain_file <- read.table(paste0("input_files/", file_prefix, ".id", plotpid, ".DBLaTags_cleaned_renamed_centroids_nhmmOut.txt.readsDomains.csv"), header=TRUE, sep=",", check.names=FALSE)
+  ## DBLa type sequences
+  ori_fasta_file <- readDNAStringSet("input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_centroids.fasta")
+  ## Isolate metadata
+  ori_isolates_file <- read.table(paste0("input_files/isolateInformation_", plotpid, ".txt"), header=FALSE, sep="\t", check.names=FALSE)
+  
+  ## Survey 8 demography & DBS-species data
+  ori_demography_file <- read.csv("input_files/Ghana_MRS_Survey 1_8_Survey_10_Epi_SpPCR_Var_281123_FINAL.csv", header=TRUE, check.names=FALSE) %>%
+    filter(Survey == 8)
+  ## Survey 8 demography & DBS-species data
+  ori_demography_file <- rbind(ori_demography_file, read.csv("input_files/Ghana_MRS_Survey 1_8_Survey_10_Epi_SpPCR_Var_281123_FINAL_3added.csv", header=TRUE, check.names=FALSE)) %>%
+    filter(Survey == 8)
+  
+  ## Survey 8 DBS-MOI data - to get correct isolates
+  ori_S8_DBS_MOI_file <- read.csv("input_files/Ghana_Survey_Merged_Epi_MOI_S1_S10_131223.csv", header=TRUE) %>% 
+    filter(Survey == 8)
+  
+  ## S8 WB-species data
+  ori_species_file <- read.table(paste0("input_files/S8MRS_DBS_speciesPCR.txt"), header=TRUE, sep="\t", check.names=FALSE) %>%
+    select(-c(starts_with("DBS_")))
+  
+  ## S8 WB-species MOI data
+  ori_Pm_MOI_file <- read.csv(paste0("input_files/S8WB_Raw_Pm_MOI.csv"), header=TRUE)
+  ori_Poc_MOI_file <- read.csv(paste0("input_files/S8WB_Raw_Poc_MOI.csv"), header=TRUE)
+  ori_Pow_MOI_file <- read.csv(paste0("input_files/S8WB_Raw_Pow_MOI.csv"), header=TRUE)
+  
+  ## S8 WB-plasma-hrp2 data
+  ori_hrp2_file <- read.table(paste0("input_files/S8MRS_ELISA_HRP2.txt"), header=TRUE, sep="\t", check.names=FALSE)
+  
+  ## GADM Map data
+  ori_MAPs_subnational_file <- read.csv("input_files/MAP_Subnational_Unit-data.csv", header=TRUE, check.names=FALSE, comment.char="")
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(ori_otutable_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".otutable.", file_prefix, ".rds"))
+  saveRDS(ori_domain_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".domain.", file_prefix, ".rds"))
+  saveRDS(ori_isolates_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates.", file_prefix, ".rds"))
+  saveRDS(ori_fasta_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".DBS_PilotS1to8_WB_S8MRS_centroids.", file_prefix, ".rds"))
+  
+  saveRDS(ori_demography_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_DBS_demography.", file_prefix, ".rds"))
+  saveRDS(ori_hrp2_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_PLASMA_hrp2.", file_prefix, ".rds"))
+  
+  saveRDS(ori_S8_DBS_MOI_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_DBS_MOI.", file_prefix, ".rds"))
+  
+  saveRDS(ori_species_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_DBS_speciesPCR.", file_prefix, ".rds"))
+  
+  saveRDS(ori_Pm_MOI_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_WB_Pm_MOI.", file_prefix, ".rds"))
+  saveRDS(ori_Poc_MOI_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_WB_Poc_MOI.", file_prefix, ".rds"))
+  saveRDS(ori_Pow_MOI_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_WB_Pow_MOI.", file_prefix, ".rds"))
+  
+  saveRDS(ori_MAPs_subnational_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".GADM_map_data.", file_prefix, ".rds"))
+    
+  ##### Delete variables
+  rm(ori_otutable_file, ori_domain_file, ori_isolates_file, ori_fasta_file, ori_demography_file, ori_hrp2_file, ori_S8_DBS_MOI_file, ori_species_file, ori_Pm_MOI_file, ori_Poc_MOI_file, ori_Pow_MOI_file, ori_MAPs_subnational_file, PART)
+}
+```
+
+# PART 2: Merge DBLa type information with OTU table (i.e., domain subclass, ups group)
+```{r}
+PART=2
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+
+  ##### Read files
+  file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART-1, ".id", plotpid, ".otutable.", file_prefix, ".rds"))
+  file_domain <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART-1, ".id", plotpid, ".domain.", file_prefix, ".rds"))
+  
+  ## Merge domain subclass info (colname: Domain)
+  file_domain$read <- gsub(";.*", "", file_domain$read)
+  file_otutable <- left_join(file_otutable, file_domain, by=c("#OTU ID"="read")) %>%
+    dplyr::rename("DBLa_type" = "#OTU ID")
+  
+  ## Merge upsA/non-upsA infos (colname: upsA_nonA)
+  file_otutable$upsA_nonA <- ifelse(grepl('DBLa1', file_otutable$domain), "upsA", 
+                             ifelse(grepl('DBLa0|DBLa2', file_otutable$domain), "non-upsA", "unclassified"))
+  
+  ## Remove unclassified DBL
+  file_otutable <- file_otutable %>% filter(upsA_nonA != "unclassified")
+  
+  ## Rearrange columns
+  file_otutable <- file_otutable %>% select("DBLa_type", "domain":"upsA_nonA", everything())
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_otutable, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".otutable_withUps.rds"))
+
+  ## Save files in TXT format
+  write.table(file_otutable, file=paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".otutable_withUps.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_otutable, file_domain, PART, PART_prev)
+}
+```
+
+# PART 3: Add metadata to isolate list
+- Split IsolateID to get WBvol, MID, Pool information
+- Add isolate type (i.e., Field, Repeat, Control, BeadRatioTest) - field isolates with repeats named R1 and R2
+- Add repertoire size info
+- Add parasite density, hrp2, species info
+```{r}
+PART=3
+PART_prev=PART-1
+PART_prev2=PART-2
+
+for (plotpid in setpid) {
+
+  ##### Read files
+  file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".otutable_withUps.rds"))
+  file_isolates <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".isolates.", file_prefix, ".rds"))
+  file_isolates_demography <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".S8MRS_DBS_demography.", file_prefix, ".rds"))
+  file_isolates_hrp2 <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".S8MRS_PLASMA_hrp2.", file_prefix, ".rds"))
+  file_isolates_speciesPCR <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".S8MRS_DBS_speciesPCR.", file_prefix, ".rds"))
+  file_isolates_Pm_MOI <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".S8MRS_WB_Pm_MOI.", file_prefix, ".rds"))
+  file_isolates_Poc_MOI <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".S8MRS_WB_Poc_MOI.", file_prefix, ".rds"))
+  file_isolates_Pow_MOI <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".S8MRS_WB_Pow_MOI.", file_prefix, ".rds"))
+  
+  ## Count isolate DBLa type rep size (by ups, total)
+  isolates_typeRepSize <- file_otutable %>%
+    select(-c("DBLa_type":"e-value")) %>%
+    group_by(upsA_nonA) %>%
+    summarise(across(where(is.numeric), ~ sum(.x, na.rm = TRUE))) %>%
+    ungroup() %>%
+    pivot_longer(!upsA_nonA, names_to=c("IsolateID"), values_to=c("counts")) %>%
+    pivot_wider(names_from=upsA_nonA, values_from=counts) %>%
+    rowwise() %>%
+    mutate(NumTypes = sum(across(c("non-upsA", "upsA"))))
+  
+  ## Split information to add columns for WB volume, MID, Pool metadata
+  ## Add information on whether an isolate is a control, repeat, or included to explore bead ratio effects
+  file_isolates <- file_isolates %>%
+    select(IsolateID=V1) %>%
+    mutate(Isolate=gsub("(-WB|-DBS|.MID).*$", "", IsolateID)) %>% # add MRS ID
+    mutate(WBvol=gsub("(^.*-WB|(.MID|-R|-1.2x).*$)", "", IsolateID), # add WBvol detail from isolateID
+           WBvol=paste0(WBvol, "uL"),
+           WBvol=ifelse(grepl("DBS", IsolateID), "DBS", WBvol)) %>%
+    mutate(MID=gsub("(^.*.MID|.P.*$)", "", IsolateID), # add MID number from isolateID
+           Pool=gsub("(^.*.P|\\.[A-Za-z].*$)", "", IsolateID)) %>% # add pool number from isolateID
+    mutate(BeadRatioTest=ifelse(grepl("1.2x", IsolateID), "Yes", "No")) %>% # add if beadratiotest
+    mutate(Control=ifelse(grepl("(Control|3D7|Dd2|HB3)", IsolateID, ignore.case=TRUE), "Yes", "No")) %>% # add if control
+    mutate(Repeat=ifelse(grepl("-R1.MID", IsolateID), "R1", # add if repeat
+                         ifelse(grepl("-R2.MID", IsolateID), "R2", "No"))) %>%
+    mutate(Isolate=gsub(".MID.*", "", Isolate)) %>%
+    mutate(Isolate=gsub("(SB|SY)", "", Isolate))
+  
+  ## Merge with repsize & MOI metadata, replace NA with 0 for select columns
+  file_isolates <- file_isolates %>%
+    left_join(., isolates_typeRepSize, by=c("IsolateID"="IsolateID")) %>%
+    mutate(`non-upsA` = coalesce(`non-upsA`, 0), # replace NA with 0
+           upsA = coalesce(upsA, 0), # replace NA with 0
+           NumTypes = coalesce(NumTypes, 0)) # replace NA with 0
+  
+  ## Merge with participant demography info
+  file_isolates <- file_isolates_demography %>%
+    mutate(Isolate=paste0("S", Survey, MRS, sprintf("%04d", study_id))) %>%
+    select(everything(), DBS_Pf=PfPCR, DBS_Pm=PmPCR, DBS_Po=PoPCR, DBS_Pv=PvPCR) %>%
+    mutate(DBS_Pf=ifelse(DBS_Pf=="Pf PCR +", 1, 0),
+           DBS_Pm=ifelse(DBS_Pm=="Pm PCR +", 1, 0),
+           DBS_Po=ifelse(DBS_Po=="Po PCR +", 1, 0),
+           DBS_Pv=ifelse(DBS_Pv=="Pv PCR +", 1, 0)) %>%
+    left_join(file_isolates, ., by=c("Isolate"="Isolate"))
+  
+  ## Add survey information for WBvol isolates
+  file_isolates <- file_isolates %>%
+    mutate(Survey=case_when(!is.na(Survey) ~ Survey,
+                            WBvol %in% WBvol_list ~ 8))
+  
+  ## Merge with participant hrp2 data
+  file_isolates <- file_isolates_hrp2 %>%
+    mutate(Isolate=paste0("S8MRS", sprintf("%04s", StudyID))) %>%
+    dplyr::rename(HRP2_Conc=`HRP2 Conc (ng/mL)`) %>%
+    left_join(file_isolates, ., by=c("Isolate"="Isolate"))
+  
+  ## Merge with participant species PCR data from WB samples
+  file_isolates <- file_isolates_speciesPCR %>%
+    mutate(Isolate=paste0("S", Survey, MRS)) %>%
+    select(-MRS) %>%
+    left_join(file_isolates, ., by=c("Isolate"="Isolate", "Survey"="Survey")) %>%
+    relocate(starts_with("DBS_"), .after = last_col()) %>%
+    relocate(starts_with("WB100_"), .after = last_col())
+
+  ## Merge with participant Pm MOI data (WB - 100uL)
+  file_isolates <- file_isolates_Pm_MOI %>%
+    select(X, PmMOI=Max) %>%
+    left_join(file_isolates, ., by=c("Isolate"="X"))
+  
+  ## Merge with participant Poc MOI data (WB - 100uL)
+  file_isolates <- file_isolates_Poc_MOI %>%
+    select(X, PocMOI=Max) %>%
+    left_join(file_isolates, ., by=c("Isolate"="X"))
+  
+  ## Merge with participant Pow MOI data (WB - 100uL)
+  file_isolates <- file_isolates_Pow_MOI %>%
+    select(X, PowMOI=Max) %>%
+    left_join(file_isolates, ., by=c("Isolate"="X"))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_allsources_metadata.rds"))
+  
+  ## Save files in TXT format
+  write.table(file_isolates, file=paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".isolates_allsources_metadata.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+
+  ##### Delete variables
+  rm(file_otutable, file_isolates, isolates_typeRepSize, file_isolates_demography, file_isolates_speciesPCR, file_isolates_hrp2, file_isolates_Pm_MOI, file_isolates_Poc_MOI, file_isolates_Pow_MOI, PART, PART_prev, PART_prev2)
+}
+```
+
+# PART 4: Select isolates from WBvol as well as DBS from S1 to S8 (uninfected, asymptomatic infections as confirmed by temperature and RDT or slide)
+- per KT's list: the DBS isolates are those with demography information
+```{r}
+PART=4
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+
+  ##### Read files
+  file_isolates <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_allsources_metadata.rds"))
+
+  ### Select isolates of interest
+  file_isolates <- file_isolates %>%
+    filter(!is.na(Survey))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.rds"))
+  ## Save files in TXT format
+  write.table(file_isolates, file=paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates, PART, PART_prev)
+}
+```
+
+# PART 5: Get combined DBS and WB distributions of MOI = 1 isolates with 20 <= upsBCrepsize <= 45
+```{r}
+PART=5
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+
+  ##### Read files
+  file_isolates <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.rds"))
+  
+  ##### Get distributions for NumTypes >= 20 & upsBC <= 45 (combined)
+  file_isolates_45BC_combined <- file_isolates %>%
+    filter(NumTypes >= 20 & `non-upsA` <= 45) %>%
+    group_by(`non-upsA`) %>%
+    summarise(n=n()) %>%
+    ungroup() %>%
+    select(DBLa_upsBC_rep_size=`non-upsA`, n)
+    
+  ##### Save output
+  ## Save files in TXT format
+  write.csv(file_isolates_45BC_combined, file=paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".isolates_Asymptomatics_WBvol.minrepsize20_combined.45BC_repSizeDist.csv"),
+              quote=FALSE, row.names=FALSE)
+  
+  ##### Delete variables
+  rm(file_isolates, file_isolates_45BC_combined, PART, PART_prev)
+}
+```
+
+# PART 6.1 (bash): Run Bayesian MOI estimation for isolates with repsize >= 20
+```{bash}
+PART=6
+PART_prev=$((PART-2))
+PART_prev2=$((PART-1))
+
+plotpid=96
+
+## Get non-upsA column
+awk -F"\t" '{if ($11 >= 20) print $1","$9}' Z01.MAIN.out_RESULTS/0${PART_prev}.id${plotpid}.isolates_Asymptomatics_WBvol_metadata.txt | sed 's/IsolateID/HostID/g' | sed 's/non-upsA/DBLa_upsBC_rep_size/g' > Z01.MAIN.out_RESULTS/0${PART}.id${plotpid}.isolates_Asymptomatics_WBvol_metadata.minrepsize20.csv
+
+# combined S8 distribution
+Rscript Bayesian-formulation-varcoding-MOI-estimation-main/scripts/MOI_estimation.R -i "Z01.MAIN.out_RESULTS/0${PART}.id${plotpid}.isolates_Asymptomatics_WBvol_metadata.minrepsize20.csv" -r "Z01.MAIN.out_RESULTS/0${PART_prev2}.id${plotpid}.isolates_Asymptomatics_WBvol.minrepsize20_combined.45BC_repSizeDist.csv" -t "count" -p "uniform" -s "NA" -v "TRUE" -a "pool" -o "Z01.MAIN.out_RESULTS/0${PART}.id${plotpid}.isolates_Asymptomatics_WBvol_metadata.minrepsize20_combined_Dist_MOI.Rdata" > Z01.MAIN.out_RESULTS/0${PART}.id${plotpid}.BayesMOI.combined_Dist_MOI.consoleOutput.txt
+```
+
+# PART 6.2 (R): Add PfMOI estimation info to isolate list (make PfMOI=1 for isolates with 0 < repsize < 20)
+```{r}
+PART=6
+PART_prev=PART-2
+
+for (plotpid in setpid) {
+  
+  ##### Load Bayesian data
+  loadRData <- function(fileName){
+  #loads an RData file, and returns it
+      load(fileName)
+      get(ls()[ls() != "fileName"])
+  }
+  
+  PfMOI_combined <- loadRData(paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.minrepsize20_combined_Dist_MOI.Rdata"))
+
+  ## Merge Bayes MOI to larger datafile, exclude controls
+  file_isolates <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.rds"))
+  
+  file_isolates <- PfMOI_combined$indLevel %>%
+    left_join(file_isolates, ., by=c("IsolateID"="HostID", "non-upsA"="DBLa_upsBC_rep_size")) %>%
+    dplyr::rename(Prob=Prob) %>%
+    mutate(PfMOI=case_when(!is.na(MOI) ~ MOI,
+                        NumTypes > 0 ~ 1,
+                        NumTypes == 0 ~ 0,
+                        TRUE ~ NA)) %>%
+    select(-MOI)
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.MOI.rds"))
+
+  ##### Delete variables
+  rm(loadRData, PfMOI_combined, file_isolates, PART, PART_prev)
+}
+```
+
+# PART 7: Select isolates of interest (S8 WB and DBS) AFEBRILE
+```{r}
+PART=7
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+
+  ##### Read files
+  file_isolates <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.MOI.rds"))
+
+  ### Select isolates of interest
+  file_isolates <- file_isolates %>%
+    filter(Survey == 8) %>% ## Select survey 8 isolates
+    mutate(WBsort = gsub("uL", "", WBvol)) %>%
+    mutate(WBsort = gsub("DBS", "0", WBsort)) %>%
+    arrange(Isolate, as.numeric(WBsort)) ## Reorder file according to isolate and WBvol (DBS, 1, 10, 50, 100)
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.S8.MOI.rds"))
+  
+  ##### Delete variables
+  rm(file_isolates, PART, PART_prev)
+}
+```
+
+# PART 8: Add permutations of presence/absence in each WBvol based on MOI
+- Added columns containing codes of presence/absence for each field isolate & each WBvol (code: 1-10-50-100uL)
+- E.g., found_code: N-Y-Y-Y means that DBLa types were found for Isolate A only in 10uL, 50uL, 100uL
+```{r}
+PART=8
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+    
+  ##### Read files
+  file_isolates <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.S8.MOI.rds"))
+  
+  ## Generate code for each isolate with at least 1 or 20 DBLa types per blood volume (Y: above threshold, N: below threshold)
+  for (repsize_thres in c(repsize_thres_nonzero, repsize_thres_popgen)) {
+    
+    repsize_thres_colname <- paste0("found_min", repsize_thres, "_code")
+    
+    file_isolates <- file_isolates %>%
+      mutate(found_min=ifelse(NumTypes >= repsize_thres, "Y", "N")) %>%
+      select(Isolate, BeadRatioTest, Repeat, Control, WBvol, found_min) %>%
+      pivot_wider(names_from=WBvol, values_from=found_min) %>%
+      mutate(found_min_code=paste(`1uL`, `10uL`, `50uL`, `100uL`, sep="-")) %>%
+      mutate(found_min_code=gsub("NA-NA-NA-NA", NA, found_min_code)) %>%
+      select(Isolate, BeadRatioTest, Repeat, Control, found_min_code) %>%
+      dplyr::rename(!!repsize_thres_colname:=found_min_code) %>%
+      left_join(file_isolates, ., by=c("Isolate", "BeadRatioTest", "Control", "Repeat"))
+  }
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.S8.FINAL.rds"))
+  
+  ##### Delete variables
+  rm(file_isolates, repsize_thres, repsize_thres_colname, PART, PART_prev)
+}
+```
+
+# PART 9: Split isolate files into dbs, field, repeats
+```{r}
+PART=9
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+    
+  ##### Read files
+  file_isolates <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_Asymptomatics_WBvol_metadata.S8.FINAL.rds"))
+  
+  ## Split files into field isolates, controls, and beadratiotest
+  file_isolates_dbs <- file_isolates %>% filter(WBvol == "DBS")
+  file_isolates_field <- file_isolates %>% filter(WBvol %in% WBvol_list) %>% filter(BeadRatioTest == "No" & Control == "No" & Repeat %in% c("No", "R1"))
+  file_isolates_repeat <- file_isolates %>% filter(WBvol %in% WBvol_list) %>% filter(BeadRatioTest == "No" & Control == "No" & Repeat %in% c("R1", "R2"))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_all_metadata.FINAL.rds"))
+  saveRDS(file_isolates_dbs, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_DBS_metadata.FINAL.rds"))
+  saveRDS(file_isolates_field, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  saveRDS(file_isolates_repeat, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_repeat_metadata.FINAL.rds"))
+  
+  ## Save files in TXT format
+  write.table(file_isolates, file=paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".isolates_all_metadata.FINAL.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+  write.table(file_isolates_dbs, file=paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".isolates_DBS_metadata.FINAL.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+  write.table(file_isolates_field, file=paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".isolates_field_metadata.FINAL.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+  write.table(file_isolates_repeat, file=paste0("Z01.MAIN.out_RESULTS/0", PART, ".id", plotpid, ".isolates_repeat_metadata.FINAL.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates, file_isolates_dbs, file_isolates_field, file_isolates_repeat, PART, PART_prev) 
+}
+```
+
+# ***** FIELD
+# PART 10.1.1 [FIELD]: Plot tile map for species analysis
+```{r}
+PART=10
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_dbs <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_DBS_metadata.FINAL.rds"))
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  
+  ### Arrange order of isolates to appear in heatmap
+  ## Order by countWBvol, repsize in 1uL, 10uL, 50uL, 100uL, isolate name)
+  file_isolates_field_orderIsolates <- file_isolates_field %>%
+    select(Isolate, WBvol, NumTypes, ParasiteuL, starts_with("DBS_"), starts_with("WB100_")) %>%
+    pivot_wider(names_from=WBvol, values_from=NumTypes) %>%
+    arrange(desc(ParasiteuL),
+            desc(DBS_Pf), desc(WB100_Pf),
+            desc(DBS_Pm), desc(WB100_Pm),
+            desc(DBS_Po), desc(WB100_Po),
+            desc(DBS_Pv), desc(WB100_Pv))
+  
+  ## Set factors
+  file_isolates_field$WBvol <- factor(file_isolates_field$WBvol, levels=c(WBvol_list))
+  file_isolates_field$Isolate <- factor(file_isolates_field$Isolate, levels=file_isolates_field_orderIsolates$Isolate)
+  file_isolates_field$AgeGrp <- factor(file_isolates_field$AgeGrp, levels=AgeGroups_list)
+  
+  ## Count observations per group as long labels
+  xlabs <- file_isolates_field %>%
+    select(Isolate, AgeGrp) %>%
+    unique()
+  xlabs <- data.frame(label=levels(xlabs$AgeGrp), label_long=paste(levels(xlabs$AgeGrp),"\n(n=",table(xlabs$AgeGrp),")",sep=""))
+  
+  ## Add long labels
+  file_isolates_field <- file_isolates_field %>%
+    left_join(., xlabs, by=c("AgeGrp"="label"))
+  
+  file_isolates_field$label_long <- factor(file_isolates_field$label_long, levels=xlabs$label_long)
+  
+  ## Plot barplot for parasite density
+  plot_bar_parDen <- ggplot(file_isolates_field, aes(x=ParasiteuL, y=Isolate)) +
+    geom_segment(aes(yend=Isolate), xend=0, color="grey50", linetype="dotted") +
+    geom_point() +
+    theme_bw() +
+    scale_x_continuous(name="Density (parasites/µl)",
+                       trans = scales::log10_trans(),
+                       breaks = scales::trans_breaks("log10", function(x) 10^x),
+                       labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    scale_y_discrete(name="Isolate") +
+    theme(panel.grid=element_blank(),
+          axis.text.y=element_blank(),
+          axis.text.x=element_text(size=11, angle=45, vjust=0.5),
+          axis.title.y=element_text(size=11),
+          axis.title.x=element_text(size=11)) + 
+    facet_grid(label_long~"Plasmodium spp. Density", space="free", scale="free") +
+    theme(strip.text.x=element_text(size=9),
+          strip.text.y=element_blank())
+  
+  ## Plot barplot for hrp2
+  plot_bar_hrp2 <- ggplot(file_isolates_field, aes(x=HRP2_Conc, y=Isolate)) +
+    geom_bar(stat="identity") +
+    theme_bw() +
+    scale_x_continuous(name="HRP2 concentration (ng/mL)", breaks=scales::pretty_breaks()) +
+    scale_y_discrete(name="Isolates") +
+    theme(panel.grid=element_blank(),
+          axis.text.y=element_blank(),
+          axis.text.x=element_text(size=11),
+          axis.title.x=element_text(size=11)) +
+    facet_grid(AgeGrp~"Plasma HRP2", space="free", scale="free") +
+    theme(strip.text.x=element_text(size=11),
+          strip.text.y=element_blank())
+  
+  ##### Species tile plot
+  ## Plot tile plot for speciesPCR (DBS + WB100) - Pf, Pm, Po
+  plot_tile_All_species_data <- file_isolates_field %>%
+    select(Isolate, starts_with("DBS_"), starts_with("WB100_"), age, AgeGrp, label_long) %>%
+    unique() %>%
+    pivot_longer(-c(Isolate, age, AgeGrp, label_long), names_to="Source") %>%
+    mutate(value=ifelse(value == 0, NA, value)) %>%
+    separate_wider_delim(Source, delim = "_", names = c("Source", "Species")) %>%
+    mutate(Source=gsub("WB100", "100uL", Source)) %>%
+    mutate(Source=factor(Source, levels=c("DBS", "100uL"))) %>%
+    mutate(Isolate=factor(Isolate, levels=file_isolates_field_orderIsolates$Isolate)) %>%
+    filter(Species != "Pv")
+  
+  ## Plot
+  plot_tile_All_species <- plot_tile_All_species_data %>%
+    ggplot(., aes(x=Source, y=Isolate, fill=Species)) +
+    geom_tile(color="white", aes(alpha=value)) +
+    theme_bw() +
+    scale_fill_manual(name="Species", values=c("#548B54", "#79CDCD", "#8B3E2F", "black")) + # Darker & Ligher mix aesthetic
+    scale_alpha(range = c(1, 1), na.value = 0) +
+    scale_x_discrete(name="Source") +
+    scale_y_discrete(name="Isolate") +
+    theme(panel.grid=element_blank(),
+          axis.title.y=element_text(size=11),
+          axis.title.x=element_text(size=11),
+          axis.text.y=element_blank(),
+          axis.text.x=element_text(size=11),
+          legend.position="none") +
+    facet_grid(label_long~Species, space="free", scale="free") +
+    theme(strip.text.x=element_text(size=11),
+          strip.text.y=element_text(size=11))
+  
+  ##### COMBINE FIGURES
+  plot_bar_parDen_species_combine <- ggarrange(plot_bar_parDen, plot_tile_All_species, nrow=1, align="h", widths=c(0.6, 1.0))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(plot_tile_All_species_data, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.file_isolates_SpeciesData.rds"))
+  saveRDS(plot_tile_All_species, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.species_only.TILE.rds"))
+
+  ## Save files in TIFF format
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_parDen.TILE.tiff"),
+  #        plot_bar_parDen_species_combine,
+  #        device="tiff", dpi=300,
+  #        width=5, height=8)
+  
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_only.TILE.tiff"),
+  #        plot_tile_All_species,
+  #        device="tiff", dpi=300,
+  #        width=4, height=8)
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_isolates_dbs, file_isolates_field_orderIsolates, xlabs, plot_bar_parDen, plot_bar_hrp2, plot_tile_All_species, species_fold_diff_prev, plot_bar_parDen_species_combine, PART, PART_prev)
+}
+```
+# PART 10.1.2 [FIELD]: Fisher Exact Test and combine with plot
+```{r}
+PART=10
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+
+  ## Tally numbers detected in DBS vs 100uL
+  file_isolates_field_count <- file_isolates_field %>%
+    select(Isolate, starts_with("DBS_"), starts_with("WB100_"), AgeGrp) %>%
+    unique() %>%
+    pivot_longer(-c(Isolate, AgeGrp), names_to="Source") %>%
+    separate_wider_delim(Source, delim = "_", names = c("Source", "Species")) %>%
+    mutate(Source=gsub("WB100", "100uL", Source)) %>%
+    mutate(Source=factor(Source, levels=c("DBS", "100uL"))) %>%
+    group_by(Source, Species) %>%
+    summarise(n=sum(value)) %>%
+    mutate(AgeGrp="All") %>%
+    select(Source, Species, AgeGrp, n)
+  
+  file_isolates_field_count <- file_isolates_field %>%
+    select(Isolate, starts_with("DBS_"), starts_with("WB100_"), AgeGrp) %>%
+    unique() %>%
+    pivot_longer(-c(Isolate, AgeGrp), names_to="Source") %>%
+    separate_wider_delim(Source, delim = "_", names = c("Source", "Species")) %>%
+    mutate(Source=gsub("WB100", "100uL", Source)) %>%
+    mutate(Source=factor(Source, levels=c("DBS", "100uL"))) %>%
+    group_by(Source, Species, AgeGrp) %>%
+    summarise(n=sum(value)) %>%
+    rbind(file_isolates_field_count, .)
+  
+  ## Pivot & calculate x increase
+  file_isolates_field_count <- file_isolates_field_count %>%
+    pivot_wider(names_from=Source, values_from=n) %>%
+    mutate(cases_fold_diff=ifelse(DBS==0, (`100uL`+1)/(DBS+1), `100uL`/DBS)) %>%
+    mutate(adjusted_fold_diff=ifelse(DBS==0, "Yes", "No")) %>%
+    filter(Species != "Pv")
+  
+  ## Run Fisher Exact Test to check significance in differences (cannot use chisq because of low freqs in minor species)
+  file_isolates_field_species_binary <- file_isolates_field %>% select(Isolate, AgeGrp, starts_with("DBS_"), starts_with("WB100_")) %>% unique() %>% pivot_longer(!c(Isolate, AgeGrp), names_to="source") %>% separate(source, c("source", "species"), sep="_") %>% pivot_wider(., names_from="source", values_from="value")
+  
+  ## Empty df
+  fishertest_df <- data.frame()
+
+  for (agegrp in c("All", AgeGroups_list)) {
+    for (sp in c("Pf", "Pm", "Po")) {
+      if (agegrp == "All") {
+        fet_tmp <- file_isolates_field_species_binary %>% filter(species==sp) %>% select(!c(Isolate, AgeGrp, species)) %>% table() %>% fisher.test(., alternative="two.sided")
+      } else {
+        fet_tmp <- file_isolates_field_species_binary %>% filter(species==sp & AgeGrp==agegrp) %>% select(!c(Isolate, AgeGrp, species))
+        # Set factors to include zeroes
+        DBS_levels <- unique(fet_tmp$WB100[!is.na(fet_tmp$WB100)])
+        WB100_levels <- unique(fet_tmp$WB100[!is.na(fet_tmp$WB100)])
+        
+        fet_tmp <- table(factor(fet_tmp$DBS, levels=DBS_levels), factor(fet_tmp$WB100, levels=WB100_levels)) %>% fisher.test(., alternative="two.sided")
+      }
+      pval <- data.frame(sp, agegrp, pval=fet_tmp$p.value) %>%
+        mutate(sig=case_when(pval > 0.05 ~ "ns",
+                             pval > 0.01 ~ "*", # p < 0.05
+                             pval > 0.001 ~ "**", # p < 0.01
+                             pval > 1e-04 ~ "***", # p < 0.001
+                             pval > 0 ~ "****")) # p < 0.0001
+      fishertest_df <- rbind(fishertest_df, pval)
+      rm(pval, DBS_levels, WB100_levels, fet_tmp)
+    }
+  }
+  
+  ## Merge count and fisher test tables and make pretty table
+  merged_table <- left_join(file_isolates_field_count, fishertest_df, by=c("Species"="sp", "AgeGrp"="agegrp")) %>%
+    select(-pval) %>%
+    mutate(AgeGrp=factor(AgeGrp, levels=c("All", AgeGroups_list))) %>%
+    arrange(Species, AgeGrp)
+  
+  ## Make pretty table
+  library(gtsummary)
+  library(gt)
+
+  ## Make species header
+  merged_table <- merged_table %>%
+    mutate(Species = gsub("Pf", "P. falciparum", Species),
+           Species = gsub("Pm", "P. malariae", Species),
+           Species = gsub("Po", "P. ovale spp.", Species)) %>%
+    mutate(Species_Header=ifelse(duplicated(Species), "", Species)) %>%
+    select(-Species) %>%
+    dplyr::rename(Species=Species_Header) %>%
+    select(Species, AgeGrp, DBS, `100uL`, sig, cases_fold_diff)
+  
+  ## Add "^" symbol to "x increase" when DBS == 0
+  merged_table <- merged_table %>%
+    mutate(cases_fold_diff=round(cases_fold_diff, 2)) %>%
+    mutate(cases_fold_diff=ifelse(DBS==0, paste0(format(cases_fold_diff, digits=3), "^"), format(cases_fold_diff, digits=3)))
+  
+  ## Change 40+ to ≥40
+  merged_table <- merged_table %>%
+    mutate(AgeGrp=gsub("40\\+ Years", "≥40 Years", AgeGrp))
+  
+  ## Create a gt table with species as headings
+  gt_table <- merged_table %>%
+    gt() %>%
+    # Add spanning header
+    tab_header(title="Number of detected infections by species & age group") %>%
+    # Adjust decimals
+    fmt_number(columns=vars(DBS, `100uL`),
+               decimals=0) %>%
+    # Relabel columns
+    cols_label(Species="Species", AgeGrp="Age Group",
+               DBS="DBS", `100uL`="100µL",
+               cases_fold_diff="× increase", sig="Sig.") %>%
+    # Adjust text alignment
+    cols_align(columns=vars(DBS, `100uL`, cases_fold_diff, sig),
+               align="center") %>%
+    cols_align(columns=vars(Species, AgeGrp),
+               align="left") %>%
+    # Add footnote
+    tab_footnote(footnote=html("For some groups (^), due to zero values for DBS, this was calculated <br> with the addition of 1 to each value. <br> E.g. for P. malariae, 21-39 years: \"× increase\" = (3+1)/(0+1) = 4.00."),
+                 locations=cells_column_labels(columns=vars(cases_fold_diff)))
+  
+  ## Save gt table as a PNG
+  gtsave(gt_table, paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.table.TILE.png"),
+                          vwidth = 800, vheight = 400)
+  
+  ## Load the saved image as a raster object
+  gt_image <- png::readPNG(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.table.TILE.png"))
+  gt_image <- grid::rasterGrob(gt_image, interpolate = TRUE)
+  
+  ## Load previous species tile plot
+  plot_tile_All_species <- readRDS(paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.species_only.TILE.rds"))
+  
+  ##### COMBINE FIGURES
+  combined_plot <- ggarrange(plot_tile_All_species, NA,
+                             ggarrange(NA, gt_image, NA,
+                                       ncol=1, heights=c(0.05,1,0.05)),
+                             nrow=1, widths=c(0.8, 0.01, 1), labels=c("A", "", "B"))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates_field_count, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.file_isolates_CasesFD.rds"))
+  
+  ## Save files in TIFF format
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_table.TILE.tiff"),
+         combined_plot,
+         device="tiff", dpi=300,
+         width=8.5, height=6)
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_isolates_field_count, file_isolates_field_species_binary, fishertest_df, agegrp, sp, merged_table, gt_table, gt_image, plot_tile_All_species, combined_plot, PART, PART_prev)
+}
+```
+
+# PART 10.2 [FIELD]: Plot tile map for MOI
+```{r}
+PART=10
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_dbs <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_DBS_metadata.FINAL.rds"))
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  
+  ## Order by countWBvol, repsize in 1uL, 10uL, 50uL, 100uL, isolate name)
+  file_isolates_field_orderIsolates <- file_isolates_field %>%
+    select(Isolate, WBvol, NumTypes, ParasiteuL, paste0("found_min", repsize_thres_nonzero, "_code")) %>%
+    pivot_wider(names_from=WBvol, values_from=NumTypes) %>%
+    arrange(desc(`1uL`), desc(`10uL`), desc(`50uL`), desc(`100uL`), Isolate)
+  
+  ##### Plot MOIs
+  ## Merge MOI data (DBS, WBvol, PmMOI, PoMOI)
+  file_isolates_MOI <- data.frame()
+  
+  for (sp in c("Pf", "Pm", "Poc", "Pow")) {
+    
+    moi_col <- paste0(sp, "MOI")
+    
+    file_isolates_MOI <- file_isolates_field %>%
+      select(Isolate, WBvol, AgeGrp, NumTypes, MOI=.data[[moi_col]], catchmentarea_ML:HRP2_Conc) %>%
+      mutate(Species=sp) %>%
+      rbind(file_isolates_MOI, .)
+    file_isolates_MOI <- file_isolates_dbs %>%
+      filter(Isolate %in% file_isolates_field_orderIsolates$Isolate) %>%
+      select(Isolate, WBvol, AgeGrp, NumTypes, MOI=.data[[moi_col]], catchmentarea_ML:HRP2_Conc) %>%
+      mutate(Species=sp) %>%
+      rbind(file_isolates_MOI, .)
+  }
+
+  ## Plot repsize (tile plot), add repsize found from DBS DBLa tags (tile plot), parasite density (barplot)
+  WBMOI_maxpoint <- file_isolates_MOI %>% select(MOI) %>% filter(!is.na(MOI)) %>% max()
+  
+  ## Replaced 0 with NA so that can color as white tiles
+  file_isolates_MOI <- file_isolates_MOI %>%
+    filter(MOI > 0)
+
+  ## Set factors
+  file_isolates_MOI$WBvol <- factor(file_isolates_MOI$WBvol, levels=c("DBS", WBvol_list))
+  file_isolates_MOI$Isolate <- factor(file_isolates_MOI$Isolate, levels=file_isolates_field_orderIsolates$Isolate)
+  file_isolates_MOI$AgeGrp <- factor(file_isolates_MOI$AgeGrp, levels=AgeGroups_list)
+  
+  ## Count observations per group - add to df
+  xlabs <- file_isolates_MOI %>%
+    filter(Species == "Pf" & WBvol %in% WBvol_list) %>%
+    select(Isolate, AgeGrp) %>%
+    unique()
+  xlabs <- data.frame(label=levels(xlabs$AgeGrp), label_long=paste(levels(xlabs$AgeGrp),"\n(n=",table(xlabs$AgeGrp),")",sep=""))
+  
+  ## Add long labels
+  file_isolates_MOI <- file_isolates_MOI %>%
+    left_join(., xlabs, by=c("AgeGrp"="label"))
+  
+  file_isolates_MOI$label_long <- factor(file_isolates_MOI$label_long, levels=xlabs$label_long)
+  
+  ## Plot tile of MOI (WB) - Pf only
+  plot_tile_MOI_WB <- file_isolates_MOI %>%
+    filter(Species == "Pf" & WBvol %in% WBvol_list) %>%
+    ggplot(., aes(x=WBvol, y=Isolate, fill=as.numeric(MOI))) +
+    geom_tile() +
+    theme_bw() +
+    scale_fill_viridis_c(name="Pf-MOI", option="inferno", na.value="white",
+                        values=c(0, 0.2, 1),
+                        breaks=c(1, seq(1, WBMOI_maxpoint, 1)),
+                        limits=c(1, WBMOI_maxpoint),
+                        direction=-1, begin=0.15, end=1.0) +
+    scale_x_discrete(name="Volume") +
+    scale_y_discrete(name="Isolate") +
+    theme(panel.grid=element_blank(),
+          axis.text.y=element_blank(),
+          axis.text.x=element_text(size=11),
+          axis.title.y=element_text(size=11),
+          axis.title.x=element_text(size=11),
+          legend.position="right",
+          legend.text=element_text(size=11),
+          legend.key.height=unit(3.5, "cm")) +
+    facet_grid(label_long~"pRBC", space="free", scale="free") +
+    theme(strip.text=element_text(size=12))
+  
+  ## Add "NA" for DBS that was not varcoded
+  file_isolates_MOI_DBS_NA <- file_isolates_MOI %>%
+    filter(Species == "Pf") %>%
+    group_by(Isolate, AgeGrp) %>%
+    summarise(n=n()) %>%
+    filter(n < 5) %>%
+    mutate(WBvol = "DBS", MOI = NA) %>%
+    select(Isolate, WBvol, MOI, AgeGrp)
+    
+  ## Join with other DBS dataset with MOI
+  file_isolates_MOI_DBS <- file_isolates_MOI %>%
+    filter(Species == "Pf") %>%
+    select(Isolate, WBvol, MOI, AgeGrp) %>%
+    rbind(., file_isolates_MOI_DBS_NA) %>%
+    filter(WBvol == "DBS")
+  
+  ## Set factors
+  file_isolates_MOI_DBS$WBvol <- factor(file_isolates_MOI_DBS$WBvol, levels=c("DBS", WBvol_list))
+  file_isolates_MOI_DBS$Isolate <- factor(file_isolates_MOI_DBS$Isolate, levels=file_isolates_field_orderIsolates$Isolate)
+  file_isolates_MOI_DBS$AgeGrp <- factor(file_isolates_MOI_DBS$AgeGrp, levels=AgeGroups_list)
+  
+  ## Plot tile of MOI (DBS) - Pf only
+  plot_tile_MOI_DBS <- file_isolates_MOI_DBS %>%
+    ggplot(.) +
+    geom_tile(aes(x=WBvol, y=Isolate, fill=as.numeric(MOI))) +
+    theme_bw() +
+    scale_fill_viridis_c(name="Pf-MOI", option="inferno", na.value="grey80", #na.value="white"
+                        values=c(0, 0.2, 1),
+                        breaks=c(1, seq(1, WBMOI_maxpoint, 1)),
+                        limits=c(1, WBMOI_maxpoint),
+                        direction=-1, begin=0.15, end=1.0) +
+    scale_x_discrete(name="Source") +
+    scale_y_discrete(name="Isolate") +
+    theme(panel.grid=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_text(size=11),
+          axis.text.y=element_blank(),
+          axis.text.x=element_text(size=11),
+          legend.position="none") +
+    facet_grid(AgeGrp~"DBS", space="free", scale="free") +
+    theme(strip.text.x=element_text(size=12),
+          strip.text.y=element_blank())
+  
+  rm(xlabs)
+  
+  ##### COMBINE FIGURES
+  plot_tile_MOI_combine <- ggarrange(plot_tile_MOI_DBS, plot_tile_MOI_WB, nrow=1, align="h", widths=c(0.25, 1))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates_MOI, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.file_isolates_MOI.rds"))
+  saveRDS(plot_tile_MOI_combine, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.species_PfMOI.TILE.rds"))
+  
+  ## Save files in TIFF format
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_PfMOI.TILE.tiff"),
+  #        plot_tile_MOI_combine,
+  #        device="tiff", dpi=300,
+  #        width=5, height=10)
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_isolates_dbs, file_isolates_field_orderIsolates, file_isolates_MOI, file_isolates_MOI_DBS_NA, file_isolates_MOI_DBS, plot_tile_MOI_WB, plot_tile_MOI_DBS, plot_tile_MOI_combine, xlabs, PART, PART_prev)
+}
+
+```
+
+# PART 10.3 [FIELD]: Plot for metagenome analysis
+```{r}
+PART=10
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_MOI <- readRDS(paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.file_isolates_MOI.rds"))
+  
+  ## Select isolates with WBvol = 100uL and MOI >= 1
+  file_isolates_MOI_100 <- file_isolates_MOI %>%
+    select(-label_long) %>%
+    filter(WBvol == WBvol_list[4] & !is.na(MOI))
+  
+  ## Add summed complexity (summation of MOI across species)
+  file_isolates_MOI_100 <- file_isolates_MOI_100 %>%
+    group_by(Isolate) %>%
+    mutate(sum_complexity=sum(MOI))
+  
+  ## Add count of species
+  file_isolates_MOI_100 <- file_isolates_MOI_100 %>%
+    group_by(Isolate) %>%
+    summarise(n_species=n()) %>%
+    left_join(file_isolates_MOI_100, ., by=c("Isolate"="Isolate"))
+  
+  ## Order by increasing number of species and complexity
+  file_isolates_MOI_100 <- file_isolates_MOI_100 %>%
+    arrange(sum_complexity, n_species) 
+  
+  ## Set factors
+  file_isolates_MOI_100$Isolate <- factor(file_isolates_MOI_100$Isolate, levels=unique(file_isolates_MOI_100$Isolate))
+  file_isolates_MOI_100$AgeGrp <- factor(file_isolates_MOI_100$AgeGrp, levels=AgeGroups_list)
+  
+  ## Count observations per group - add to df
+  xlabs <- file_isolates_MOI_100 %>%
+    select(Isolate, AgeGrp) %>%
+    unique()
+  xlabs <- data.frame(label=levels(xlabs$AgeGrp), label_long=paste(levels(xlabs$AgeGrp),"\n(n=",table(xlabs$AgeGrp),")",sep=""))
+    
+  ## Add long labels
+  file_isolates_MOI_100 <- file_isolates_MOI_100 %>%
+    left_join(., xlabs, by=c("AgeGrp"="label"))
+  
+  file_isolates_MOI_100$label_long <- factor(file_isolates_MOI_100$label_long, levels=xlabs$label_long)
+  
+  ## Calculate median MOI
+  file_isolates_MOI_100_median <- file_isolates_MOI_100 %>%
+    group_by(AgeGrp) %>%
+    summarise(median=median(sum_complexity))
+  
+  ## Plot bar
+  plot_bar_MOI_stack <- file_isolates_MOI_100 %>%
+    ggplot(., aes(x=Isolate, y=as.numeric(MOI), fill=Species)) +
+    geom_bar(stat="identity", position="stack") +
+    theme_bw() +
+    scale_x_discrete(name="Isolate") +
+    scale_y_continuous("Metagenomic Complexity") +
+    scale_fill_manual(name="Species", values=c("#548B54", "#79CDCD", "#8B3E2F", "black")) + # Darker & Ligher mix aesthetic
+    theme(panel.grid=element_blank(),
+          axis.text.x=element_blank(),
+          legend.position="top") +
+    facet_grid(.~label_long, space="free", scale="free") +
+    theme(strip.text=element_text(size=12))
+  
+  plot_bar_MOI_fill <- file_isolates_MOI_100 %>%
+    ggplot(., aes(x=Isolate, y=as.numeric(MOI), fill=Species)) +
+    geom_bar(stat="identity", position="fill") +
+    theme_bw() +
+    scale_x_discrete(name="Isolate") +
+    scale_y_continuous("Proportion of Complexity") +
+    scale_fill_manual(name="Species", values=c("#548B54", "#79CDCD", "#8B3E2F", "black")) + # Darker & Ligher mix aesthetic
+    theme(panel.grid=element_blank(),
+          axis.text.x=element_blank(),
+          legend.position="none") +
+    facet_grid(.~label_long, space="free", scale="free") +
+    theme(strip.text=element_text(size=12))
+  
+  ##### COMBINE FIGURES
+  plot_bar_MOI_combine <- ggarrange(plot_bar_MOI_stack, plot_bar_MOI_fill, nrow=2, align="v", heights=c(1, 0.9), labels="AUTO")
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates_MOI_100, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.file_isolates_MOI_WB100.rds"))
+  
+  ## Save files in TIFF format
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_MOI_WB100.BAR.tiff"),
+         plot_bar_MOI_combine,
+         device="tiff", dpi=300,
+         width=10, height=7)
+  
+  ##### Delete variables
+  rm(file_isolates_MOI, file_isolates_MOI_100, plot_bar_MOI_stack, plot_bar_MOI_fill, plot_bar_MOI_combine, xlabs, PART, PART_prev)
+}
+```
+
+# PART 10.4 [FIELD]: Statistics for metagenomic analysis
+```{r}
+PART=10
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_MOI_100 <- readRDS(paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.file_isolates_MOI_WB100.rds"))
+  
+  ## keep only unique entries
+  file_isolates_MOI_100 <- file_isolates_MOI_100 %>%
+    ungroup() %>%
+    select(Isolate, sum_complexity, age, temp, sex_ML, village_ML, section_ML, hgb, occup) %>%
+    unique()
+  
+  ## test sex (Mann Whitney U)
+  stats_sex <- wilcox.test(sum_complexity ~ sex_ML, data = file_isolates_MOI_100, exact = FALSE, alternative="two.sided")
+  
+  ## test village (Mann Whitney U)
+  stats_village <- wilcox.test(sum_complexity ~ village_ML, data = file_isolates_MOI_100, exact = FALSE, alternative="two.sided")
+  
+  ## test hgb (Spearman's)
+  stats_hgb <- cor.test(x=file_isolates_MOI_100$hgb, y=file_isolates_MOI_100$sum_complexity, method = 'spearman', exact=FALSE, alternative="two.sided")
+  
+  ## test age (Spearman's)
+  stats_age2 <- cor.test(x=file_isolates_MOI_100$age, y=file_isolates_MOI_100$sum_complexity, method = 'spearman', exact=FALSE, alternative="two.sided")
+  
+  ## test temp (Spearman's)
+  stats_temp <- cor.test(x=as.numeric(file_isolates_MOI_100$temp), y=file_isolates_MOI_100$sum_complexity, method = 'spearman', exact=FALSE, alternative="two.sided")
+  
+  ## test occup (Kruskal-Wallis)
+  stats_occup <- kruskal.test(sum_complexity ~ occup, data=file_isolates_MOI_100)
+  
+  ## test section (Kruskal-Wallis)
+  stats_section <- kruskal.test(sum_complexity ~ section_ML, data=file_isolates_MOI_100)
+  
+  ## test EXTREME complexity vs sex (Fisher exact test) - extreme thres at 10
+  stats_sex_EXTREME_minMOI10 <- file_isolates_MOI_100 %>%
+    mutate(complexity=ifelse(sum_complexity >= 10, "high", "low")) %>%
+    select(complexity, sex_ML) %>%
+    table() %>%
+    fisher.test(., alternative="two.sided")
+  
+  stats_sex_EXTREME_minMOI9 <- file_isolates_MOI_100 %>%
+    mutate(complexity=ifelse(sum_complexity >= 9, "high", "low")) %>%
+    select(complexity, sex_ML) %>%
+    table() %>%
+    fisher.test(., alternative="two.sided")
+  
+  ## Combine stats
+  stats_complexity <- data.frame()
+  
+  for (variable in c("sex", "village")) {
+    
+    var_specific <- get(paste0("stats_", variable))
+    
+    stats_complexity <- data.frame(epi_param = variable) %>%
+      mutate(pval = var_specific$p.value) %>%
+      mutate(statistic = paste("W =", var_specific$statistic)) %>%
+      mutate(estimate = NA) %>%
+      mutate(stats_test = "Wilcoxon Rank Sum Test") %>%
+      rbind(stats_complexity, .)
+  }
+
+  for (variable in c("hgb", "age", "temp")) {
+    
+    var_specific <- get(paste0("stats_", variable))
+    
+    stats_complexity <- data.frame(epi_param = variable) %>%
+      mutate(pval = var_specific$p.value) %>%
+      mutate(statistic = paste("S =", var_specific$statistic)) %>%
+      mutate(estimate = paste("rho =", var_specific$estimate)) %>%
+      mutate(stats_test = "Spearman Rank Correlation Test") %>%
+      rbind(stats_complexity, .)
+  }
+  
+  for (variable in c("occup", "section")) {
+    
+    var_specific <- get(paste0("stats_", variable))
+    
+    stats_complexity <- data.frame(epi_param = variable) %>%
+      mutate(pval = var_specific$p.value) %>%
+      mutate(statistic = paste("KW chi squared =", var_specific$statistic)) %>%
+      mutate(estimate = NA) %>%
+      mutate(stats_test = "Kruskal-Wallis Rank Sum Test") %>%
+      rbind(stats_complexity, .)
+  }
+  
+  for (variable in c("sex_EXTREME_minMOI10", "sex_EXTREME_minMOI9")) {
+    
+    var_specific <- get(paste0("stats_", variable))
+    
+    stats_complexity <- data.frame(epi_param = variable) %>%
+      mutate(pval = var_specific$p.value) %>%
+      mutate(statistic = paste("95% CI =", var_specific$conf.int[1], "-", var_specific$conf.int[2])) %>%
+      mutate(estimate = paste("odds ratio =", var_specific$estimate)) %>%
+      mutate(stats_test = "Fisher's Exact Test") %>%
+      rbind(stats_complexity, .)
+  }
+  
+  ##### Save output
+  ## Save files in TXT format
+  write.table(stats_complexity, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.metagenomic_epiparam_stats.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_MOI_100, stats_sex, stats_village, stats_hgb, stats_age, stats_temp, stats_occup, stats_section, stats_complexity, stats_sex_EXTREME_minMOI9, stats_sex_EXTREME_minMOI10, PART, PART_prev)
+}
+```
+
+# PART 11 [FIELD]: Plot permutations of presence/absence in each WBvol
+```{r}
+PART=11
+PART_prev=PART-2
+
+for (plotpid in setpid) {
+    
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  
+  ## Proportion of found_min_code
+  file_isolates_field_propfoundmin <- file_isolates_field %>%
+    select(Isolate, starts_with("found_min")) %>%
+    unique() %>%
+    pivot_longer(!Isolate) %>%
+    group_by(name, value) %>%
+    summarise(n=n()) %>%
+    mutate(prop=n/sum(n)) %>%
+    ungroup() %>%
+    mutate(thres=gsub("found_min", "", name)) %>%
+    mutate(thres=gsub("_code", "", thres)) %>%
+    select(-name) %>%
+    dplyr::rename(found_min_code=value)
+
+  ## Set factors
+  file_isolates_field_propfoundmin$found_min_code <- factor(file_isolates_field_propfoundmin$found_min_code,
+                                                            levels=c("N-N-N-N", "Y-N-N-N", "N-N-Y-N",
+                                                                     "Y-N-N-Y", "N-Y-N-Y", "N-Y-Y-N",
+                                                                     "Y-N-Y-Y", "Y-Y-Y-N",
+                                                                     "N-N-N-Y", "N-N-Y-Y", "N-Y-Y-Y", "Y-Y-Y-Y"))
+  
+  ### Plot number of isolates, DBLa richness, proportion of upsA/non-upsA per blood volume
+  ## Get coefficient
+  coeff_var <- file_isolates_field_propfoundmin %>% group_by(thres) %>% summarise(sum=sum(n)) %>% select(sum) %>% unique() %>% as.numeric()
+  
+  ## Plot barplots (varcoding)
+  foundmincode_col <- rev(RColorBrewer::brewer.pal(11, "Spectral"))[seq(2,11,1)]
+  
+  plot_bar_foundmin <- ggplot(file_isolates_field_propfoundmin, aes(x=as.factor(thres), y=n, fill=found_min_code)) +
+    geom_bar(stat="identity", position="stack", color="black") +
+    theme_bw() +
+    scale_y_continuous(name="Number of Isolates", breaks=scales::pretty_breaks(10),
+                       sec.axis=sec_axis(~./coeff_var, name="Proportion of Isolates", breaks=scales::pretty_breaks(10))) +
+    scale_x_discrete(name="Threshold\n(minimum repertoire size per isolate)") +
+    scale_fill_manual(name="Permutations found\n(1-10-50-100uL)",
+                      values=c("white", foundmincode_col)) +
+    theme(legend.position="right",
+          panel.grid=element_blank())
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(plot_bar_foundmin, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.foundmincodes_prop.BAR.PLOT.rds"))
+  
+  ## Save files in TIFF format
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.foundmincodes_prop.BAR.tiff"),
+  #        plot_bar_foundmin,
+  #        device="tiff", dpi=300,
+  #        width=5, height=5)
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_isolates_field_propfoundmin, foundmincode_col, coeff_var, plot_bar_foundmin, PART, PART_prev)
+}
+```
+
+# PART 12 [FIELD]: Get list of isolates with >=1 or >= 20 DBLa in ANY PAIR of volumes
+```{r}
+PART=12
+PART_prev=PART-3
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+
+  ## Exclude isolates with found_min1_code N-N-N-N
+  found_min_code <- paste0("found_min", repsize_thres_nonzero, "_code")
+  file_isolates_field_allfoundmin1 <- file_isolates_field %>% filter(.data[[found_min_code]] != "N-N-N-N")
+  
+  ## Extract lists of isolates with repsize >=1 or >=20 in a PAIR of WBvol
+  file_isolates_field_eachWBpair_NumTypes1 <- data.frame()
+  file_isolates_field_eachWBpair_NumTypes20 <- data.frame()
+  
+  ## Loop through metrics + pairwise comparisons
+  for (row in 1:nrow(WBvol_pairs_df)) {
+    pw_volS <- WBvol_pairs_df[row, "volS"]
+    pw_volB <- WBvol_pairs_df[row, "volB"]
+    pw_pair_label <- WBvol_pairs_df[row, "pairs"]
+    
+    ## Get isolates with NumTypes >= 1 in pair WBvol
+    file_isolates_field_eachWBpair_NumTypes1 <- file_isolates_field_allfoundmin1 %>%
+      filter(WBvol %in% c(pw_volS, pw_volB)) %>%
+      select(Isolate, WBvol, NumTypes) %>%
+      pivot_wider(names_from=WBvol, values_from=NumTypes) %>%
+      filter(.data[[pw_volS]] >= repsize_thres_nonzero & .data[[pw_volB]] >=repsize_thres_nonzero) %>%
+      select(Isolate) %>%
+      mutate(pw_pair = pw_pair_label) %>%
+      rbind(file_isolates_field_eachWBpair_NumTypes1, .)
+    
+    ## Get isolates with NumTypes >= 20 in pair WBvol
+    file_isolates_field_eachWBpair_NumTypes20 <- file_isolates_field_allfoundmin1 %>%
+      filter(WBvol %in% c(pw_volS, pw_volB)) %>%
+      select(Isolate, WBvol, NumTypes) %>%
+      pivot_wider(names_from=WBvol, values_from=NumTypes) %>%
+      filter(.data[[pw_volS]] >= repsize_thres_popgen & .data[[pw_volB]] >=repsize_thres_popgen) %>%
+      select(Isolate) %>%
+      mutate(pw_pair = pw_pair_label) %>%
+      rbind(file_isolates_field_eachWBpair_NumTypes20, .)
+  }
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(file_isolates_field_allfoundmin1, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates_allfoundmin1.rds"))
+  saveRDS(file_isolates_field_eachWBpair_NumTypes1, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.isolates_NumTypesMin", repsize_thres_nonzero, ".rds"))
+  saveRDS(file_isolates_field_eachWBpair_NumTypes20, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.isolates_NumTypesMin", repsize_thres_popgen, ".rds"))
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_isolates_field_allfoundmin1, file_isolates_field_eachWBpair_NumTypes1, file_isolates_field_eachWBpair_NumTypes20, found_min_code, row, pw_volS, pw_volB, pw_pair_label, PART, PART_prev)
+}
+```
+
+# PART 13 [FIELD]: Plot distributions of repsize and MOI for each WBvol
+```{r}
+PART=13
+PART_prev=PART-1
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_allfoundmin1.rds"))
+  
+  ## Include only isolates with found_min1_code Y-Y-Y-Y
+  found_min_code <- paste0("found_min", repsize_thres_nonzero, "_code")
+  file_isolates_field <- file_isolates_field %>% filter(.data[[found_min_code]] == "Y-Y-Y-Y")
+  
+  ## Extract info
+  file_isolates_field <- file_isolates_field %>%
+    select(Isolate, WBvol, NumTypes, PfMOI) %>%
+    pivot_longer(-c(Isolate, WBvol), names_to="metric") %>%
+    mutate(metric=gsub("NumTypes", "Repertoire size", metric)) %>%
+    mutate(metric=gsub("PfMOI", "Pf-MOI", metric)) %>%
+    mutate(metric=factor(metric, levels=c("Repertoire size", "Pf-MOI"))) %>%
+    mutate(WBvol=factor(WBvol, levels=WBvol_list)) #%>%
+    # mutate(value=ifelse(value == 0, NA, value))
+  
+  ##### Plot boxplots
+  ## Statistical test
+  kw_pval_all <- data.frame()
+  
+  for (pw_metric in c("Repertoire size", "Pf-MOI")) {
+    
+    pw_metric_name <- case_when(pw_metric == "Repertoire size" ~ "repsize",
+                                pw_metric == "Pf-MOI" ~ "MOI")
+    
+    file_isolates_field_metric <- file_isolates_field %>%
+      filter(metric == pw_metric)
+    
+    ## Shapiro test for normality
+    shapiro_norm <- file_isolates_field_metric %>%
+      shapiro_test(value)
+    
+    ## Statistical test (Friedman test)
+    friedman_nstats <- file_isolates_field_metric %>%
+      friedman_test(value ~ WBvol | Isolate)
+    
+    ## Statistical test (Wilcoxon paired test with holm correction)
+    kw_pval <- file_isolates_field_metric %>%
+      pairwise_wilcox_test(value ~ WBvol,
+                           paired=TRUE,
+                           p.adjust.method="holm",
+                           alternative="two.sided",
+                           comparisons=list(c("1uL", "10uL"), c("1uL", "50uL"), c("1uL", "100uL"),
+                                            c("10uL", "50uL"), c("10uL", "100uL"), c("50uL", "100uL"))) %>% 
+      add_xy_position(x = "WBvol", step.increase=0.05) %>%
+      mutate(metric = pw_metric) %>%
+      mutate(alternative = "none")
+    
+    ## Save
+    kw_pval_all <- rbind(kw_pval_all, kw_pval)
+
+    ## Count observations per boxplot
+    xlabs <- file_isolates_field_metric %>%
+      # filter(!is.na(value)) %>%
+      select(Isolate, WBvol) %>%
+      unique()
+    xlabs <- data.frame(label=levels(xlabs$WBvol), label_long=paste(levels(xlabs$WBvol),"\n(n=",table(xlabs$WBvol),")",sep=""))
+
+    ## Plot
+    plot_paired_boxplot <- file_isolates_field_metric %>%
+      ggboxplot(., x = "WBvol", y = "value", id="Isolate",
+               line.color="gray", fill="WBvol",  line.size=0.4, line.type=NA, add="jitter") +
+      scale_fill_jco(name="Volume") +
+      stat_pvalue_manual(kw_pval, xmin="group1", xmax="group2", label="p.adj.signif", hide.ns=TRUE, tip.length=0, vjust=0.9) +
+      labs(
+        subtitle = get_test_label(friedman_nstats,  detailed = TRUE)
+        ) +
+      theme_bw() +
+      scale_x_discrete(name="Volume", labels=xlabs$label_long) +
+      scale_y_continuous(name=pw_metric, breaks=scales::pretty_breaks(10), limits=c(0,NA)) +
+      theme(legend.text=element_text(size=12),
+            panel.grid=element_blank(),
+            axis.text=element_text(size=12),
+            axis.title=element_text(size=14)) +
+      facet_wrap(metric~., scales="free") +
+      theme(strip.text=element_text(size=12))
+    
+    ## Save plots as variable
+    assign(paste0("pw_plotBoxplot_", pw_metric_name), plot_paired_boxplot)
+  }
+  
+  ##### COMBINE FIGURES
+  # pw_plotBoxplots <- ggarrange(pw_plotBoxplot_repsize, pw_plotBoxplot_MOI, ncol=2, common.legend=TRUE)
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(pw_plotBoxplot_MOI, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.MOIonly.BOX.rds"))
+
+  ## Save files in TIFF format
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.repsizeonly.BOX.tiff"),
+  #        pw_plotBoxplot_repsize,
+  #        device="tiff", dpi=300,
+  #        width=6, height=6)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.MOIonly.BOX.tiff"),
+  #        pw_plotBoxplot_MOI,
+  #        device="tiff", dpi=300,
+  #        width=6, height=6)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.pairedWilcoxTest_repsize_MOI.BOX.tiff"),
+  #        pw_plotBoxplots,
+  #        device="tiff", dpi=300,
+  #        width=12, height=6)
+  
+  ## Save files in TXT format
+  write.table(friedman_nstats, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.friedmantest_pvals.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  write.table(unnest(kw_pval_all, groups), file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.pairedWilcox_pvals.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_field, friedman_nstats, kw_pval_all, kw_pval, pw_metric, pw_metric_name, file_isolates_field_metric, xlabs, plot_paired_boxplot, pw_plotBoxplot_repsize, pw_plotBoxplot_MOI, pw_plotBoxplots, found_min_code, PART, PART_prev)
+}
+```
+
+# PART 14 [FIELD]: Plot concordance of repsize and MOI for each pair of WBvol
+```{r}
+PART=14
+PART_prev=PART-2
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_allfoundmin1.rds"))
+  
+  ##### Include only isolates with found_min1_code Y-Y-Y-Y
+  found_min_code <- paste0("found_min", repsize_thres_nonzero, "_code")
+  file_isolates_field <- file_isolates_field %>% filter(.data[[found_min_code]] == "Y-Y-Y-Y")
+  
+  ##### Extract info
+  file_isolates_field <- file_isolates_field %>%
+    select(Isolate, WBvol, NumTypes, PfMOI) %>%
+    pivot_longer(-c(Isolate, WBvol), names_to="metric") %>%
+    mutate(metric=gsub("NumTypes", "Repertoire size", metric)) %>%
+    mutate(metric=gsub("PfMOI", "Pf-MOI", metric)) %>%
+    mutate(metric=factor(metric, levels=c("Repertoire size", "Pf-MOI"))) %>%
+    mutate(WBvol=factor(WBvol, levels=WBvol_list))
+  
+  ##### Plot scatter plots
+  ## Statistical test (Lin's concordance correlation coefficient)
+  CCC_df_all <- data.frame()
+  
+  for (pw_metric in c("Repertoire size", "Pf-MOI")) {
+    
+    pw_metric_name <- case_when(pw_metric == "Repertoire size" ~ "repsize",
+                                pw_metric == "Pf-MOI" ~ "MOI")
+    
+    file_isolates_field_metric <- file_isolates_field %>%
+      filter(metric == pw_metric)
+  
+    ## Empty df
+    file_isolates_field_metric_pivot <- data.frame()
+    CCC_df_metric <- data.frame()
+  
+    for (row in 1:nrow(WBvol_pairs_df)) {
+      pw_volS <- WBvol_pairs_df[row, "volS"]
+      pw_volB <- WBvol_pairs_df[row, "volB"]
+      pw_pair_label <- WBvol_pairs_df[row, "pairs"]
+      
+      ## Temporary df to extract pairs of volumes
+      file_isolates_field_metric_tmp <- file_isolates_field_metric %>%
+        filter(WBvol %in% c(pw_volS, pw_volB)) %>%
+        pivot_wider(names_from="WBvol", values_from="value") %>%
+        dplyr::rename(volS_value=pw_volS, volB_value=pw_volB) %>%
+        mutate(label = pw_pair_label) %>%
+        mutate(volS_name = pw_volS) %>%
+        mutate(volB_name = pw_volB)
+      
+      ## Save
+      file_isolates_field_metric_pivot <- rbind(file_isolates_field_metric_pivot, file_isolates_field_metric_tmp)
+        
+      ### Calculate Lin's concordance correlation coefficient
+      stat_ccc <- CCC(file_isolates_field_metric_tmp$volS_value,
+                      file_isolates_field_metric_tmp$volB_value,
+                      conf.level=0.95, na.rm=FALSE)
+      
+      ## Get linear line for plotting
+      stat_lm <- lm(file_isolates_field_metric_tmp$volB_value ~ file_isolates_field_metric_tmp$volS_value)
+      alpha_val <- summary(stat_lm)$coefficients[1,1] %>% as.numeric()
+      beta_val <-  summary(stat_lm)$coefficients[2,1] %>% as.numeric()
+      
+      ## Add label & info to data frame
+      ccc <- round(stat_ccc$rho.c[,1], digits = 2)
+      low.95ci <- round(stat_ccc$rho.c[,2], digits = 2)
+      high.95ci <- round(stat_ccc$rho.c[,3], digits = 2)
+      
+      label_ccc <- paste0("CCC: ", ccc, "\n(95% CI ", low.95ci, " - ", high.95ci, ")")
+      
+      CCC_df_metric <- rbind(CCC_df_metric,
+                          cbind(as.numeric(0),
+                                as.numeric(0.95*max(file_isolates_field_metric_tmp$volB_value)),
+                                label=pw_pair_label, label_ccc, ccc,
+                                as.numeric(low.95ci), as.numeric(high.95ci),
+                                as.numeric(alpha_val), as.numeric(beta_val)))
+    }
+    
+    ## Save
+    CCC_df_all <- rbind(CCC_df_all, CCC_df_metric)
+
+    ## Set factors
+    file_isolates_field_metric_pivot$volS_name <- factor(file_isolates_field_metric_pivot$volS_name, levels=WBvol_list)
+    file_isolates_field_metric_pivot$volB_name <- factor(file_isolates_field_metric_pivot$volB_name, levels=WBvol_list)
+    file_isolates_field_metric_pivot$label <- factor(file_isolates_field_metric_pivot$label, levels=WBvol_pairs_df$pairs)
+    CCC_df_metric$label <- factor(CCC_df_metric$label, levels=WBvol_pairs_df$pairs)
+      
+    ## Count observations per group - add to df
+    xlabs <- file_isolates_field_metric_pivot %>%
+      select(Isolate, label) %>%
+      unique()
+    xlabs <- data.frame(label=levels(xlabs$label), label_long=paste(levels(xlabs$label),"\n(n=",table(xlabs$label),")",sep=""))
+  
+    ## Add long labels
+    file_isolates_field_metric_pivot <- file_isolates_field_metric_pivot %>% left_join(., xlabs, by=c("label"="label"))
+    CCC_df_metric <- CCC_df_metric %>% left_join(., xlabs, by=c("label"="label"))
+    
+    file_isolates_field_metric_pivot$label_long <- factor(file_isolates_field_metric_pivot$label_long, levels=xlabs$label_long)
+    CCC_df_metric$label_long <- factor(CCC_df_metric$label_long, levels=xlabs$label_long)
+    
+    ## Plot
+    plot_scatter <- file_isolates_field_metric_pivot %>%
+      select(-Isolate) %>%
+      group_by(metric, volS_value, volB_value, volS_name, volB_name, label_long) %>%
+      summarise(pointsize=n()) %>%
+      ungroup() %>%
+      ggplot(., aes(x=volS_value, y=volB_value)) +
+      geom_point(aes(fill=volS_name, size=pointsize, alpha=volB_name), color="black", shape=21) +
+      geom_abline(intercept=0, slope=1, linewidth=0.5, linetype="dashed", color="black") +
+      geom_abline(data=CCC_df_metric, aes(intercept=alpha_val, slope=beta_val), color="black") +
+      geom_text(data=CCC_df_metric, aes(x=min(as.numeric(V1)), y=max(as.numeric(V2)), label=label_ccc), hjust=0) +
+      theme_bw() +
+      scale_x_continuous(name=bquote(.(pw_metric)[S]), breaks=scales::pretty_breaks(),
+                         limits=c(0,NA)) +
+      scale_y_continuous(name=bquote(.(pw_metric)[L]), breaks=scales::pretty_breaks(),
+                         limits=c(0,NA)) +
+      scale_size(name="Number of\nisolates") +
+      scale_fill_jco(name=expression(Vol[S])) +
+      scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+      guides(alpha="none") +
+      theme(legend.position="top",
+            panel.grid=element_blank()) +
+      facet_wrap(.~label_long, nrow=2) +
+      theme(strip.text=element_text(size=12))
+      
+    ## Save plots as variable
+    assign(paste0("pw_plotScatter_", pw_metric_name), plot_scatter)
+  }
+    
+  ##### Save output
+  ## Save files in TIFF format
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.Repsize.SCATTER.tiff"),
+  #        pw_plotScatter_repsize,
+  #        device="tiff", dpi=300,
+  #        width=9, height=7)
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.MOI.SCATTER.tiff"),
+         pw_plotScatter_MOI,
+         device="tiff", dpi=300,
+         width=9, height=7)
+
+  ## Save files in TXT format
+  write.table(CCC_df_all, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.CCC_values.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_field, CCC_df_all, pw_metric_name, pw_volS, pw_volB, file_isolates_field_metric, file_isolates_field_metric_pivot, CCC_df_metric, row, pw_volS, pw_volB, pw_pair_label, file_isolates_field_metric_tmp, stat_ccc, stat_lm, alpha_val, beta_val, plot_scatter, ccc, high.95ci, low.95ci, label_ccc, pw_metric, pw_plotScatter_repsize, pw_plotScatter_MOI, found_min_code, PART, PART_prev)
+}
+```
+
+# PART 15 [FIELD]: Calculate directional PTS (with >=20 type cutoff)
+```{r}
+PART=15
+PART_prev=PART-3
+PART_prev2=PART-13
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_allfoundmin1.rds"))
+  file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".otutable_withUps.rds"))
+  
+  ## Exclude isolates with NumTypes >= 20
+  file_isolates_field <- file_isolates_field %>% filter(NumTypes >= repsize_thres_popgen)
+  
+  ## Calculate PTS
+  ## Empty df
+  isolates_PTS <- data.frame()
+  
+  ## Loop through pairwise WBvols
+  for (row in 1:nrow(WBvol_pairs_df)) {
+    pw_volS <- WBvol_pairs_df[row, "volS"]
+    pw_volB <- WBvol_pairs_df[row, "volB"]
+    pw_volS_label <- WBvol_pairs_df[row, "volS_label"]
+    pw_volB_label <- WBvol_pairs_df[row, "volB_label"]
+    pw_pair_label <- WBvol_pairs_df[row, "pairs"]
+    
+    ## Get NumTypes for all isolates with NumTypes >= 20 in  any WBvol pair
+    file_isolates_field_IsolatesVolPairs <- file_isolates_field %>%
+      filter(WBvol %in% c(pw_volS, pw_volB)) %>%
+      select(Isolate, WBvol, NumTypes) %>%
+      pivot_wider(names_from=WBvol, values_from=NumTypes)
+
+    ## Loop through all isolates
+    for (isolate_select in unique(file_isolates_field_IsolatesVolPairs$Isolate)) {
+      
+      isoID_for_ptscalc <- file_isolates_field %>%
+          filter(Isolate == isolate_select) %>%
+          filter(WBvol %in% c(pw_volS, pw_volB))
+      
+      isolates_PTS <- file_otutable %>%
+        select(isoID_for_ptscalc$IsolateID) %>%
+        geneticSimilarity() %>%
+        GSmatrixToTable() %>%
+        mutate(label = pw_pair_label) %>% # Add label column (e.g. 1uL & 10uL)
+        mutate(Isolate = isolate_select) %>% # Add Isolate column (e.g. S8MRS0010)
+        mutate(stateA = gsub(".*-WB", "", SampleID1), # Add state column (e.g. stateA=1uL, stateB=10uL)
+               stateA = gsub("(-R|.MID).*$", "uL", stateA),
+               stateB = gsub(".*-WB", "", SampleID2),
+               stateB = gsub("(-R|.MID).*$", "uL", stateB)) %>%
+        mutate(Comparison = case_when(stateA==pw_volS ~ "PTS_AtoB", # Add Comparison column (e.g. PTS_AtoB)
+                                      stateA==pw_volB ~ "PTS_BtoA")) %>%
+        mutate(stateA=pw_volS, # Change state representation
+               stateB=pw_volB) %>%
+        mutate(sampleA=ifelse(Comparison=="PTS_AtoB", SampleID1, SampleID2), # Change isolate representation
+               sampleB=ifelse(Comparison=="PTS_AtoB", SampleID2, SampleID1)) %>%
+        select(Isolate, stateA, stateB, sampleA, sampleB, label, Comparison, GS_score) %>%
+        pivot_wider(names_from="Comparison", values_from="GS_score") %>% # pivot into 1 line
+        rbind(isolates_PTS, .)
+    }
+  }
+  
+  ## Add MOI & diff information
+  file_isolates_field_MOI_ParDen <- file_isolates_field %>%
+    select(Isolate, WBvol, PfMOI, ParasiteuL, AgeGrp, found_min_code=paste0("found_min", repsize_thres_popgen, "_code")) # found_min20_code
+  
+  isolates_PTS_MOI <- isolates_PTS %>%
+    left_join(., file_isolates_field_MOI_ParDen, by=c("Isolate"="Isolate", "stateA"="WBvol")) %>%
+    dplyr::rename("Pf-MOI_A"="PfMOI") %>%
+    left_join(., file_isolates_field_MOI_ParDen, by=c("Isolate"="Isolate", "stateB"="WBvol", "AgeGrp"="AgeGrp", "found_min_code"="found_min_code", "ParasiteuL"="ParasiteuL")) %>%
+    dplyr::rename("Pf-MOI_B"="PfMOI") %>%
+    relocate(PTS_BtoA, .after=PTS_AtoB) %>%
+    relocate(`Pf-MOI_B`, .after=`Pf-MOI_A`)
+  
+  ## Set factors
+  isolates_PTS_MOI$label <- factor(isolates_PTS_MOI$label, levels=WBvol_pairs_df$pairs)
+  isolates_PTS_MOI$stateA <- factor(isolates_PTS_MOI$stateA, levels=WBvol_list)
+  isolates_PTS_MOI$stateB <- factor(isolates_PTS_MOI$stateB, levels=WBvol_list)
+  isolates_PTS_MOI$AgeGrp <- factor(isolates_PTS_MOI$AgeGrp, levels=AgeGroups_list)
+  isolates_PTS_MOI$found_min_code <- factor(isolates_PTS_MOI$found_min_code, levels=c("Y-Y-Y-Y", "N-Y-Y-Y", "N-N-Y-Y", "N-N-N-Y"))
+    
+  ### Plot PTS information
+  ## BoxPlot: PTS_Small-to-Big
+  xlabs <- data.frame(label=levels(isolates_PTS_MOI$label), label_long=paste(levels(isolates_PTS_MOI$label),"\n(n=",table(isolates_PTS_MOI$label),")",sep=""))
+  
+  ## Add long labels
+  isolates_PTS_MOI <- isolates_PTS_MOI %>% left_join(., xlabs, by=c("label"="label"))
+  isolates_PTS_MOI$label_long <- factor(isolates_PTS_MOI$label_long, levels=xlabs$label_long)
+  
+  fig_PTS_StoB_boxplots <- isolates_PTS_MOI %>%
+    ggplot(., aes(x=label_long, y=PTS_AtoB, fill=stateA, alpha=stateB)) +
+    geom_boxplot() +
+    theme_bw() +
+    scale_x_discrete(name="Pairwise comparison") +
+    scale_y_continuous(name=expression(PTS[S]), limits=c(0,1), breaks=scales::pretty_breaks(10)) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+    guides(alpha="none") +
+    theme(legend.position="top",
+          panel.grid=element_blank())
+  
+  ## BoxPlot: PTS_Big-to-Small
+  fig_PTS_BtoS_boxplots <- isolates_PTS_MOI %>%
+    ggplot(., aes(x=label_long, y=PTS_BtoA, fill=stateA, alpha=stateB)) +
+    geom_boxplot() +
+    theme_bw() +
+    scale_x_discrete(name="Pairwise comparison") +
+    scale_y_continuous(name=expression(PTS[L]), limits=c(0,1), breaks=scales::pretty_breaks(10)) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+    guides(alpha="none") +
+    theme(legend.position="top",
+          panel.grid=element_blank())
+  
+  ## Scatter: Colored by found in smaller volume
+  fig_PTS_scatter_VolS <- isolates_PTS_MOI %>%
+    ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=stateA)) +
+    geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
+    geom_point(color="black", shape=21) +
+    theme_bw() +
+    scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
+    scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    theme(legend.position="top",
+          panel.grid=element_blank()) +
+    facet_wrap(label_long~., nrow=2) +
+    theme(strip.text=element_text(size=12))
+  
+  ## Scatter: Colored by Parasite density
+  fig_PTS_scatter_colParDen <- isolates_PTS_MOI %>%
+    ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=ParasiteuL)) +
+    geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
+    geom_point(color="black", shape=21) +
+    theme_bw() +
+    scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
+    scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
+    scale_fill_gsea(name="Parasite density",
+                    trans = scales::log10_trans(),
+                    breaks = scales::trans_breaks("log10", function(x) 10^x) (c(1, 10^5)),
+                    labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    theme(legend.position="right",
+          panel.grid=element_blank()) +
+    facet_wrap(label_long~., nrow=2) +
+    theme(strip.text=element_text(size=12))
+  
+  ## Scatter: Colored by Age group
+  fig_PTS_scatter_colAgeGrp <- isolates_PTS_MOI %>%
+    ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=AgeGrp)) +
+    geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
+    geom_point(color="black", shape=21) +
+    theme_bw() +
+    scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
+    scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
+    scale_fill_startrek(name="Age Group") +
+    theme(legend.position="right",
+          panel.grid=element_blank()) +
+    facet_wrap(label_long~., nrow=2) +
+    theme(strip.text=element_text(size=12))
+  
+  ## Scatter: Colored by found in detection permutation
+  fig_PTS_scatter_colFoundMinCode <- isolates_PTS_MOI %>%
+    ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=found_min_code)) +
+    geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
+    geom_point(color="black", shape=21) +
+    theme_bw() +
+    scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
+    scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
+    scale_fill_startrek(name="Detected Permutations\n(1-10-50-100uL)") +
+    theme(legend.position="top",
+          panel.grid=element_blank()) +
+    facet_wrap(label_long~., nrow=2) +
+    theme(strip.text=element_text(size=12))
+  
+  ## Scatter: Colored by pairwise MOI
+  fig_PTS_scatter_facetMOI <- isolates_PTS_MOI %>%
+    mutate(`Pf-MOI_A`=factor(ifelse(`Pf-MOI_A` >= 5, ">=5", `Pf-MOI_A`), levels=c(seq(1,4,1), ">=5"))) %>%
+    mutate(`Pf-MOI_B`=factor(ifelse(`Pf-MOI_B` >= 5, ">=5", `Pf-MOI_B`), levels=c(seq(1,4,1), ">=5"))) %>%
+    ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=label)) +
+    geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
+    geom_point(color="black", shape=21) +
+    theme_bw() +
+    scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
+    scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
+    scale_fill_startrek(name="") +
+    facet_grid(`Pf-MOI_A`~`Pf-MOI_B`) +
+    theme(strip.text=element_text(size=12),
+          panel.grid=element_blank())
+  
+  ##### COMBINE FIGURES
+  ## Combine box plots
+  fig_PTS_boxplots <- ggarrange(fig_PTS_StoB_boxplots, fig_PTS_BtoS_boxplots, ncol=2, common.legend=TRUE)
+  
+  ## Combine scatters and boxes colored by permutations
+  fig_PTS_box_scatters <- ggarrange(fig_PTS_scatter_colFoundMinCode, fig_PTS_boxplots,
+                                    heights=c(2, 1.5), nrow=2, labels="AUTO")
+  
+  ## Combine scatters colored by parasite density and age groups
+  fig_PTS_scatters_parden_age <- ggarrange(fig_PTS_scatter_colParDen,
+                                           fig_PTS_scatter_colAgeGrp,
+                                    nrow=2, labels="AUTO", align="v")
+  
+  ##### Save output
+  ## Save files in TIFF format
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_dist.BOX.tiff"),
+  #        fig_PTS_boxplots,
+  #        device="tiff", dpi=300,
+  #        width=12, height=6)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByAgeGrp.SCATTER.tiff"),
+  #        fig_PTS_scatter_colAgeGrp,
+  #        device="tiff", dpi=300,
+  #        width=8, height=4)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByVolS.SCATTER.tiff"),
+  #        fig_PTS_scatter_VolS,
+  #        device="tiff", dpi=300,
+  #        width=8, height=4)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByFoundMinCode.SCATTER.tiff"),
+  #        fig_PTS_scatter_colFoundMinCode,
+  #        device="tiff", dpi=300,
+  #        width=8, height=4)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByParDensity.SCATTER.tiff"),
+  #        fig_PTS_scatter_colParDen,
+  #        device="tiff", dpi=300,
+  #        width=8, height=4)
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByParDensityAge.SCATTER.tiff"),
+         fig_PTS_scatters_parden_age,
+         device="tiff", dpi=300,
+         width=9, height=10)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByMOI.SCATTER.tiff"),
+  #        fig_PTS_scatter_facetMOI,
+  #        device="tiff", dpi=300,
+  #        width=14, height=12)
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByFoundMinCode.SCATTER_BOX.tiff"),
+         fig_PTS_box_scatters,
+         device="tiff", dpi=300,
+         width=11, height=12)
+  
+  ## Save files in TXT format
+  write.table(isolates_PTS_MOI, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_otutable, isolates_PTS, found_min_code, row, pw_volS, pw_volB, pw_volS_label, pw_volB_label, pw_pair_label, file_isolates_field_IsolatesVolPairs, isoID_for_ptscalc, file_isolates_field_MOI_ParDen, isolates_PTS_MOI, fig_PTS_StoB_boxplots, fig_PTS_BtoS_boxplots, fig_PTS_scatter_VolS, fig_PTS_scatter_colParDen, fig_PTS_scatter_colAgeGrp, fig_PTS_scatter_colFoundMinCode, fig_PTS_scatters_parden_age, fig_PTS_scatter_facetMOI, fig_PTS_boxplots, fig_PTS_box_scatters, xlabs, isolate_select, PART, PART_prev, PART_prev2)
+}
+```
+
+# PART 16 [FIELD]: Calculate differences (fold difference) in repsize and MOI
+```{r}
+PART=16
+PART_prev=PART-4
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_allfoundmin1.rds"))
+  
+  ## Include only isolates with found_min1_code Y-Y-Y-Y
+  found_min_code <- paste0("found_min", repsize_thres_nonzero, "_code")
+  file_isolates_field <- file_isolates_field %>% filter(.data[[found_min_code]] == "Y-Y-Y-Y")
+
+  ## Extract info
+  file_isolates_field_pivot <- file_isolates_field %>%
+    select(Isolate, WBvol, NumTypes, PfMOI) %>%
+    pivot_longer(-c(Isolate, WBvol), names_to="metric") %>%
+    mutate(metric=gsub("NumTypes", "Repertoire size", metric)) %>%
+    mutate(metric=gsub("PfMOI", "Pf-MOI", metric)) %>%
+    mutate(metric=factor(metric, levels=c("Repertoire size", "Pf-MOI"))) %>%
+    mutate(WBvol=factor(WBvol, levels=WBvol_list))
+  
+  ##### Calculate changes (fold difference)
+  ## Empty df
+  isolates_diff_FC <- data.frame()
+    
+  for (pw_metric in c("Repertoire size", "Pf-MOI")) {
+    
+    pw_metric_name <- case_when(pw_metric == "Repertoire size" ~ "repsize",
+                                pw_metric == "Pf-MOI" ~ "MOI")
+    
+    file_isolates_field_metric <- file_isolates_field_pivot %>%
+      filter(metric == pw_metric)
+    
+    for (row in 1:nrow(WBvol_pairs_df)) {
+      pw_volS <- WBvol_pairs_df[row, "volS"]
+      pw_volB <- WBvol_pairs_df[row, "volB"]
+      pw_pair_label <- WBvol_pairs_df[row, "pairs"]
+      
+      ## Calculate fold difference for repsize & MOI
+      isolates_diff_FC <- file_isolates_field_metric %>%
+        filter(WBvol %in% c(pw_volS, pw_volB)) %>%
+        pivot_wider(names_from="WBvol", values_from="value") %>%
+        dplyr::rename(volS_value=pw_volS, volB_value=pw_volB) %>%
+        mutate(label = pw_pair_label) %>%
+        mutate(volS_name = pw_volS) %>%
+        mutate(volB_name = pw_volB) %>%
+        mutate(diff_value=volB_value / volS_value) %>% ## fold difference (multiply)
+        select(Isolate, volS_name, volB_name, label, diff_metric=metric, volS_value, volB_value, diff_value) %>%
+        rbind(isolates_diff_FC, .)
+    }
+    rm(row)
+  }
+  
+  ## Exclude comparisons where one of the volumes is zero value
+  isolates_diff_FC_nonzero <- isolates_diff_FC %>%
+    filter(volS_value > 0 & volB_value > 0) ## remove zero values
+  
+  ## Count observations per boxplot
+  xlabs <- isolates_diff_FC_nonzero %>%
+    select(Isolate, label) %>%
+    unique
+  xlabs$label <- factor(xlabs$label, levels=WBvol_pairs_df$pairs)
+  xlabs <- data.frame(label=levels(xlabs$label), label_long=paste(levels(xlabs$label),"\n(n=",table(xlabs$label),")",sep=""))
+  
+  ## Add long label to df
+  isolates_diff_FC_nonzero <- isolates_diff_FC_nonzero %>%
+    left_join(., xlabs, by=c("label"="label"))
+  
+  ## Set factors
+  for (df in c("isolates_diff_FC_nonzero")) {
+    df_factor <- get(df)
+    df_factor$label <- factor(df_factor$label, levels=WBvol_pairs_df$pairs)
+    df_factor$label_long <- factor(df_factor$label_long, levels=xlabs$label_long)
+    df_factor$diff_metric <- factor(df_factor$diff_metric, levels=c("Repertoire size", "Pf-MOI"))
+    df_factor$volS_name <- factor(df_factor$volS_name, levels=WBvol_list)
+    df_factor$volB_name <- factor(df_factor$volB_name, levels=WBvol_list)
+    assign(df, df_factor)
+  }
+  
+  ## Plot boxplots (Fold Change)
+  plot_box_FC_repsize <- isolates_diff_FC_nonzero %>%
+    filter(diff_metric == "Repertoire size") %>%
+    ggplot(., aes(x=label, y=diff_value)) +
+    geom_hline(yintercept=2^0, linetype="dashed", col="red", size=1) +
+    geom_boxplot(aes(fill=volS_name, alpha=volB_name), width=0.5) +
+    theme_bw() +
+    scale_x_discrete(name="Pairwise comparison", labels=xlabs$label_long) +
+    scale_y_continuous(name="Fold Difference",
+                       trans = scales::log2_trans(),
+                       breaks = scales::trans_breaks("log2", function(x) 2^x),
+                       labels = scales::trans_format("log2", scales::math_format(2^.x))) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+    guides(alpha="none") +
+    theme(legend.position="top",
+          panel.grid=element_blank()) +
+    facet_wrap(.~diff_metric) +
+    theme(strip.text=element_text(size=12))
+  
+  plot_box_FC_MOI <- isolates_diff_FC_nonzero %>%
+    filter(diff_metric == "Pf-MOI") %>%
+    ggplot(., aes(x=label, y=diff_value)) +
+    geom_hline(yintercept=2^0, linetype="dashed", col="red", size=1) +
+    geom_boxplot(aes(fill=volS_name, alpha=volB_name), width=0.5) +
+    theme_bw() +
+    scale_x_discrete(name="Pairwise comparison", labels=xlabs$label_long) +
+    scale_y_continuous(name="Fold Difference",
+                       trans = scales::log2_trans(),
+                       breaks = scales::trans_breaks("log2", function(x) 2^x),
+                       labels = scales::trans_format("log2", scales::math_format(2^.x))) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+    guides(alpha="none") +
+    theme(legend.position="top",
+          panel.grid=element_blank()) +
+    facet_wrap(.~diff_metric) +
+    theme(strip.text=element_text(size=12))
+  
+  ## Plot scatter (Fold Change)
+  plot_scatter_FC_repsize <- isolates_diff_FC_nonzero %>%
+    filter(diff_metric == "Repertoire size") %>%
+    ggplot(., aes(x=volS_value, y=diff_value)) +
+    geom_hline(yintercept=2^0, linetype="dashed", col="red", size=1) +
+    geom_point(aes(fill=volS_name, alpha=volB_name), color="black", position="jitter", shape=21) +
+    theme_bw() +
+    scale_x_continuous(name=expression(Repertoire~size[S]), breaks=scales::pretty_breaks(10),
+                       limits=c(0, NA)) +
+    scale_y_continuous(name="Fold Difference",
+                       trans = scales::log2_trans(),
+                       breaks = scales::trans_breaks("log2", function(x) 2^x),
+                       labels = scales::trans_format("log2", scales::math_format(2^.x))) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+    guides(alpha="none") +
+    theme(legend.position="top",
+          panel.grid=element_blank(),
+          axis.text.x=element_text(angle=90, vjust=0.5)) +
+    facet_wrap(.~label_long, nrow=2) +
+    theme(strip.text=element_text(size=12))
+  
+  plot_scatter_FC_MOI <- isolates_diff_FC_nonzero %>%
+    filter(diff_metric == "Pf-MOI") %>%
+    group_by(volS_name, volB_name, volS_value, diff_value, label_long) %>%
+    summarise(pointsize=n()) %>%
+    ungroup() %>%
+    ggplot(., aes(x=volS_value, y=diff_value)) +
+    geom_hline(yintercept=2^0, linetype="dashed", col="red", size=1) +
+    geom_point(aes(fill=volS_name, alpha=volB_name, size=pointsize), color="black", shape=21) +
+    theme_bw() +
+    scale_x_continuous(name=expression(Pf-MOI[S]), breaks=scales::pretty_breaks(10),
+                       limits=c(0, NA)) +
+    scale_y_continuous(name="Fold Difference",
+                       trans = scales::log2_trans(),
+                       breaks = scales::trans_breaks("log2", function(x) 2^x),
+                       labels = scales::trans_format("log2", scales::math_format(2^.x))) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+    guides(alpha="none") +
+    scale_size(name="Number of\nisolates") +
+    theme(legend.position="top",
+          panel.grid=element_blank(),
+          axis.text.x=element_text(angle=90, vjust=0.5)) +
+    facet_wrap(.~label_long, nrow=2) +
+    theme(strip.text=element_text(size=12))
+  
+  ## MOI FC, Facet by Age
+  plot_scatter_FC_MOI_FacetAgeGrp <- isolates_diff_FC_nonzero %>%
+    filter(diff_metric == "Pf-MOI") %>%
+    left_join(., file_isolates_field, by=c("Isolate"="Isolate")) %>%
+    mutate(AgeGrp=factor(AgeGrp, labels=AgeGroups_list)) %>%
+    group_by(AgeGrp, volS_name, volB_name, volS_value, diff_value, label_long) %>%
+    summarise(pointsize=n()) %>%
+    ungroup() %>%
+    ggplot(., aes(x=volS_value, y=diff_value)) +
+    geom_hline(yintercept=2^0, linetype="dashed", col="red", size=1) +
+    geom_point(aes(fill=volS_name, alpha=volB_name, size=pointsize), color="black", shape=21) +
+    theme_bw() +
+    scale_x_continuous(name=expression(Pf-MOI[S]), breaks=scales::pretty_breaks(10),
+                       limits=c(0, NA)) +
+    scale_y_continuous(name="Fold Difference",
+                       trans = scales::log2_trans(),
+                       breaks = scales::trans_breaks("log2", function(x) 2^x),
+                       labels = scales::trans_format("log2", scales::math_format(2^.x))) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+    guides(alpha="none") +
+    scale_size(name="Number of\nisolates") +
+    theme(legend.position="top",
+          panel.grid=element_blank(),
+          axis.text.x=element_text(angle=90, vjust=0.5)) +
+    facet_grid(AgeGrp~label_long) +
+    theme(strip.text=element_text(size=12))
+  
+  ##### COMBINE FIGURES
+  plot_combine <- ggarrange(plot_scatter_FC_repsize, plot_scatter_FC_MOI,
+                            nrow=2, align="v", labels="AUTO")
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(isolates_diff_FC_nonzero, file=paste0("Z02.FIELD.out_RDS/", PART, ".id", plotpid, ".FIELD.FC_dist.rds"))
+  
+  ## Save files in TIFF format
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.FC_dist_Repsize.BOX.tiff"),
+  #        plot_box_FC_repsize,
+  #        device="tiff", dpi=300,
+  #        width=6, height=6)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.FC_dist_MOI.BOX.tiff"),
+  #        plot_box_FC_MOI,
+  #        device="tiff", dpi=300,
+  #        width=6, height=6)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.FC_acrossRepsize.SCATTER.tiff"),
+  #        plot_scatter_FC_repsize,
+  #        device="tiff", dpi=300,
+  #        width=8, height=5)
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.FC_acrossMOI.SCATTER.tiff"),
+         plot_scatter_FC_MOI,
+         device="tiff", dpi=300,
+         width=8, height=5)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.FC_acrossMOI_FacetAge.SCATTER.tiff"),
+  #        plot_scatter_FC_MOI_FacetAgeGrp,
+  #        device="tiff", dpi=300,
+  #        width=12, height=10)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.FC_acrossMOIandRepsize.SCATTER.tiff"),
+  #        plot_combine,
+  #        device="tiff", dpi=300,
+  #        width=8, height=10)
+  
+  ## Save files in TXT format
+  write.table(isolates_diff_FC_nonzero, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.FC_dist.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_isolates_field_pivot, file_isolates_field_metric, isolates_diff_FC, isolates_diff_FC_nonzero, isolates_diff_FC_nonzero_MOI, found_min_code, pw_metric, pw_metric_name, row, pw_volS, pw_volB, pw_pair_label, df, df_factor, plot_box_FC_MOI, plot_box_FC_repsize, plot_scatter_FC_MOI, plot_scatter_FC_repsize, plot_scatter_FC_MOI_FacetAgeGrp, plot_scatter_FC_MOI_model, plot_scatter_FC_MOI_1vs100_model, plot_combine, label_pick, xlabs, xlabs_tmp, PART, PART_prev)
+}
+```
+
+# PART 17 [FIELD]: Where one of pair is zero
+```{r}
+PART=17
+PART_prev=PART-5
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_allfoundmin1.rds"))
+  
+  ## Extract info
+  file_isolates_field_pivot <- file_isolates_field %>%
+    select(Isolate, WBvol, NumTypes, PfMOI) %>%
+    pivot_longer(-c(Isolate, WBvol), names_to="metric") %>%
+    mutate(metric=gsub("NumTypes", "Repertoire size", metric)) %>%
+    mutate(metric=gsub("PfMOI", "Pf-MOI", metric)) %>%
+    mutate(metric=factor(metric, levels=c("Repertoire size", "Pf-MOI"))) %>%
+    mutate(WBvol=factor(WBvol, levels=WBvol_list))
+  
+  ##### Calculate changes (fold difference)
+  ## Empty df
+  isolates_diff_vol <- data.frame()
+    
+  for (pw_metric in c("Pf-MOI")) {
+    
+    pw_metric_name <- case_when(pw_metric == "Repertoire size" ~ "repsize",
+                                pw_metric == "Pf-MOI" ~ "MOI")
+    
+    file_isolates_field_metric <- file_isolates_field_pivot %>%
+      filter(metric == pw_metric)
+    
+    for (row in 1:nrow(WBvol_pairs_df)) {
+      pw_volS <- WBvol_pairs_df[row, "volS"]
+      pw_volB <- WBvol_pairs_df[row, "volB"]
+      pw_pair_label <- WBvol_pairs_df[row, "pairs"]
+      
+      ## Calculate fold difference for repsize & MOI
+      isolates_diff_vol <- file_isolates_field_metric %>%
+        filter(WBvol %in% c(pw_volS, pw_volB)) %>%
+        pivot_wider(names_from="WBvol", values_from="value") %>%
+        dplyr::rename(volS_value=pw_volS, volB_value=pw_volB) %>%
+        mutate(label = pw_pair_label) %>%
+        mutate(volS_name = pw_volS) %>%
+        mutate(volB_name = pw_volB) %>%
+        select(Isolate, volS_name, volB_name, label, diff_metric=metric, volS_value, volB_value) %>%
+        rbind(isolates_diff_vol, .)
+    }
+    rm(row)
+  }
+  
+  ## Include comparisons where one of the volumes is zero value
+  isolates_onezero <- isolates_diff_vol %>%
+    filter(volS_value == 0 | volB_value == 0) ## remove zero values
+  
+  ## Count observations per boxplot
+  xlabs <- isolates_onezero %>%
+    select(Isolate, label, diff_metric) %>%
+    unique
+  xlabs$label <- factor(xlabs$label, levels=WBvol_pairs_df$pairs)
+  xlabs <- data.frame(label=levels(xlabs$label), label_long=paste(levels(xlabs$label),"\n(n=",table(xlabs$label),")",sep=""))
+  
+  ## Add long label to df
+  isolates_onezero <- isolates_onezero %>%
+    left_join(., xlabs, by=c("label"="label"))
+  
+  ## Calculate sizes
+  isolates_onezero <- isolates_onezero %>%
+    filter(diff_metric == "Pf-MOI") %>%
+    group_by(label_long, volS_value, volB_value) %>%
+    summarise(n=n()) %>%
+    group_by(label_long) %>%
+    mutate(prop=n/sum(n))
+  
+  ## Set factors
+  isolates_onezero$label_long <- factor(isolates_onezero$label_long, levels=xlabs$label_long)
+  
+  ## Plot scatter
+  plot_scatter_onezero <- ggplot(isolates_onezero, aes(x=as.character(volS_value), y=as.character(volB_value), size=prop)) +
+    geom_point() +
+    theme_bw() +
+    scale_x_discrete(name=bquote(.(pw_metric)[S])) +
+    scale_y_discrete(name=bquote(.(pw_metric)[L])) +
+    guides(size=guide_legend(title="Proportion")) +
+    theme(panel.grid=element_blank()) +
+    facet_wrap(.~label_long, nrow=1) +
+    theme(strip.text=element_text(size=12))
+  
+  ##### Save output
+  ## Save files in TIFF format
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.MOI_zeroes.SCATTER.tiff"),
+         plot_scatter_onezero,
+         device="tiff", dpi=300,
+         width=10, height=3)
+  
+  ## Save files in TXT format
+  write.table(isolates_onezero, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.MOI_zeroes.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_isolates_field_pivot, file_isolates_field_metric, isolates_diff_vol, isolates_onezero, pw_metric, pw_metric_name, row, pw_volS, pw_volB, pw_pair_label, df, df_factor, plot_scatter_onezero, xlabs, PART, PART_prev)
+}
+```
+
+
+# PART 18 [FIELD] Power calculation based on proportion of MOI>1, by age and volume
+```{r}
+PART=18
+PART_prev=PART-9
+
+for (plotpid in setpid) {
+
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  
+  ## Include only isolates with found_min1_code Y-Y-Y-Y
+  found_min_code <- paste0("found_min", repsize_thres_nonzero, "_code")
+  file_isolates_field <- file_isolates_field %>% filter(.data[[found_min_code]] == "Y-Y-Y-Y")
+  
+  ## Get proportions, NOT stratified by age
+  for (vol in c("10uL", "50uL", "100uL")) {
+    ## Get NumTypes and MOI
+    file_isolates_metadata_eachWBpair_propMOI1 <- file_isolates_field %>%
+      select(Isolate, WBvol, NumTypes, PfMOI) %>%
+      complete(Isolate, WBvol) %>%
+      pivot_longer(!c(Isolate, WBvol),
+                   names_to="metric") %>%
+      replace(., is.na(.), 0) %>%
+      mutate(value=as.numeric(value)) %>%
+      mutate(metric=gsub("NumTypes", "Repertoire size", metric)) %>%
+      left_join(., file_isolates_field, by=c("Isolate"="Isolate")) %>%
+      select(Isolate, WBvol=WBvol.x, AgeGrp, metric, value) %>%
+      filter(metric == "PfMOI") %>%
+      filter(WBvol %in% c("1uL", vol)) %>%
+      unique() %>%
+      mutate(MOI_cat = ifelse(value > 1, "Pf-MOI > 1", "Pf-MOI <= 1")) %>%
+      group_by(MOI_cat, WBvol) %>%
+      summarise(n_perMOIcat=n()) %>%
+      ungroup() %>%
+      group_by(WBvol) %>%
+      mutate(n_total=sum(n_perMOIcat)) %>%
+      mutate(prop_perMOIcat=n_perMOIcat/n_total) %>%
+      filter(MOI_cat == "Pf-MOI > 1")
+    
+    assign(paste0("pwr_1uL_",vol), file_isolates_metadata_eachWBpair_propMOI1)
+  }
+  rm(vol)
+  
+  ### Power calculation
+  pwr2ptest_all <- data.frame()
+  pwr2p2ntest_all <- data.frame()
+  
+  for (compares in c("1uL_10uL", "1uL_50uL", "1uL_100uL")) {
+    df_tmp <- get(paste0("pwr_", compares))
+    vol1_tmp <- str_split(compares, "_", simplify = TRUE)[1]
+    vol2_tmp <- str_split(compares, "_", simplify = TRUE)[2]
+    
+    out_tmp <- pwr.2p.test(h=ES.h(p1 = df_tmp[grepl(vol2_tmp, df_tmp[["WBvol"]]),]$prop_perMOIcat,
+                                  p2 = df_tmp[grepl(vol1_tmp, df_tmp[["WBvol"]]),]$prop_perMOIcat),
+                           sig.level=0.05, power=0.8, alternative=c("two.sided"))
+
+    out_tmp_unequalN <- pwr.2p2n.test(h=ES.h(p1 = df_tmp[grepl(vol2_tmp, df_tmp[["WBvol"]]),]$prop_perMOIcat,
+                                             p2 = df_tmp[grepl(vol1_tmp, df_tmp[["WBvol"]]),]$prop_perMOIcat),
+                                      n1 = df_tmp[grepl(vol2_tmp, df_tmp[["WBvol"]]),]$n_total,
+                                      n2 = df_tmp[grepl(vol1_tmp, df_tmp[["WBvol"]]),]$n_total,
+                                      sig.level=0.05, alternative=c("two.sided"))
+
+    pwr2ptest_all <- out_tmp %>%
+      rbind(pwr2ptest_all, .)
+
+    pwr2p2ntest_all <- out_tmp_unequalN %>%
+      rbind(pwr2p2ntest_all, .)
+  }
+  rm(compares, df_tmp, vol1_tmp, vol2_tmp, out_tmp, out_tmp_unequalN)
+  
+  pwr2ptest_all <- cbind(AgeGroup="All",
+                         comparison=c("1uL_10uL", "1uL_50uL", "1uL_100uL"),
+                         pwr2ptest_all)
+  pwr2p2ntest_all <- cbind(AgeGroup="All",
+                           comparison=c("1uL_10uL", "1uL_50uL", "1uL_100uL"),
+                           pwr2p2ntest_all)
+
+  ## Get proportions, stratified by age
+  for (vol in c("10uL", "50uL", "100uL")) {
+    ## Get NumTypes and MOI, only for isolates with data in all volumes
+    file_isolates_metadata_eachWBpair_propMOI1 <- file_isolates_field %>%
+      select(Isolate, WBvol, NumTypes, PfMOI) %>%
+      complete(Isolate, WBvol) %>%
+      pivot_longer(!c(Isolate, WBvol),
+                   names_to="metric") %>%
+      replace(., is.na(.), 0) %>%
+      mutate(value=as.numeric(value)) %>%
+      mutate(metric=gsub("NumTypes", "Repertoire size", metric)) %>%
+      left_join(., file_isolates_field, by=c("Isolate"="Isolate")) %>%
+      select(Isolate, WBvol=WBvol.x, AgeGrp, metric, value) %>%
+      filter(metric == "PfMOI") %>%
+      filter(WBvol %in% c("1uL", vol)) %>%
+      unique() %>%
+      mutate(MOI_cat = ifelse(value > 1, "Pf-MOI > 1", "Pf-MOI <= 1")) %>%
+      group_by(MOI_cat, AgeGrp, WBvol) %>%
+      summarise(n_perMOIcat=n()) %>%
+      ungroup() %>%
+      group_by(AgeGrp, WBvol) %>%
+      mutate(n_total=sum(n_perMOIcat)) %>%
+      mutate(prop_perMOIcat=n_perMOIcat/n_total) %>%
+      filter(MOI_cat == "Pf-MOI > 1")
+    
+    assign(paste0("pwr_1uL_",vol), file_isolates_metadata_eachWBpair_propMOI1)
+  }
+  rm(vol)
+
+  ### Power calculation, stratified by age
+  pwr2ptest_age_all <- data.frame()
+  pwr2p2ntest_age_all <- data.frame()
+  
+  for (age_tmp in AgeGroups_list) {
+    for (compares in c("1uL_10uL", "1uL_50uL", "1uL_100uL")) {
+      df_tmp <- get(paste0("pwr_", compares)) %>% filter(AgeGrp==age_tmp)
+      vol1_tmp <- str_split(compares, "_", simplify = TRUE)[1]
+      vol2_tmp <- str_split(compares, "_", simplify = TRUE)[2]
+    
+      out_tmp <- pwr.2p.test(h=ES.h(p1 = df_tmp[grepl(vol2_tmp, df_tmp[["WBvol"]]),]$prop_perMOIcat,
+                                    p2 = df_tmp[grepl(vol1_tmp, df_tmp[["WBvol"]]),]$prop_perMOIcat),
+                             sig.level=0.05, power=0.8, alternative=c("two.sided"))
+  
+      out_tmp_unequalN <- pwr.2p2n.test(h=ES.h(p1 = df_tmp[grepl(vol2_tmp, df_tmp[["WBvol"]]),]$prop_perMOIcat,
+                                               p2 = df_tmp[grepl(vol1_tmp, df_tmp[["WBvol"]]),]$prop_perMOIcat),
+                                        n1 = df_tmp[grepl(vol2_tmp, df_tmp[["WBvol"]]),]$n_total,
+                                        n2 = df_tmp[grepl(vol1_tmp, df_tmp[["WBvol"]]),]$n_total,
+                                        sig.level=0.05, alternative=c("two.sided"))
+
+      pwr2ptest_age_all <- out_tmp %>%
+        rbind(pwr2ptest_age_all, .)
+  
+      pwr2p2ntest_age_all <- out_tmp_unequalN %>%
+        rbind(pwr2p2ntest_age_all, .)
+  
+      #plot_tmp <- plot(out_tmp)
+      #plot_tmp_unequalN <- plot(out_tmp_unequalN)
+  
+      # assign(paste0("plot_", vol1_tmp, "_", vol2_tmp), plot_tmp)
+      # assign(paste0("plot_unequalN_", vol1_tmp, "_", vol2_tmp), plot_tmp_unequalN)
+    }
+    rm(compares, df_tmp, vol1_tmp, vol2_tmp, out_tmp, out_tmp_unequalN)
+  }
+  rm(age_tmp)
+  
+  ## Combine into one
+  pwr2ptest_all <- rbind(pwr2ptest_all,
+                         cbind(AgeGroup=paste(rep(AgeGroups_list, each=3)),
+                               comparison=c("1uL_10uL", "1uL_50uL", "1uL_100uL"),
+                               pwr2ptest_age_all))
+  pwr2p2ntest_all <- rbind(pwr2p2ntest_all,
+                           cbind(AgeGroup=paste(rep(AgeGroups_list, each=3)),
+                                 comparison=c("1uL_10uL", "1uL_50uL", "1uL_100uL"),
+                                 pwr2p2ntest_age_all))
+  
+  ##### Save output
+  ## Save files in TXT format
+  write.table(pwr2ptest_all, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.pwr2ptest.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  write.table(pwr2p2ntest_all, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.pwr2p2ntest.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_isolates_metadata_eachWBpair_propMOI1, pwr2ptest_all, pwr2p2ntest_all, pwr2ptest_age_all, pwr2p2ntest_age_all, pwr_1uL_10uL, pwr_1uL_50uL, pwr_1uL_100uL, found_min_code, PART, PART_prev)
+}
+```
+
+# ***** REPEATS
+# PART 19 [REPEAT]: Plot tile map for repeat isolates across four WB volumes
+```{r}
+PART=19
+PART_prev=PART-10
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_repeat <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_repeat_metadata.FINAL.rds"))
+
+  ### Arrange order of isolates to appear in heatmap
+  ## Order by WBvol, repsize in 1uL, 10uL, 50uL, 100uL, #WBvol found with any types, isolate name)
+  found_min_code <- paste0("found_min", repsize_thres_nonzero, "_code")
+    
+  file_isolates_repeat_orderIsolates <- file_isolates_repeat %>%
+    select(Isolate, WBvol, Repeat, NumTypes, ParasiteuL, .data[[found_min_code]]) %>%
+    pivot_wider(names_from=WBvol, values_from=NumTypes) %>%
+    arrange(desc(`1uL`), desc(`10uL`), desc(`50uL`), desc(`100uL`), desc(ParasiteuL), Isolate)
+  
+  ## Set factors
+  file_isolates_repeat$WBvol <- factor(file_isolates_repeat$WBvol, levels=c(WBvol_list))
+  file_isolates_repeat$Isolate <- factor(file_isolates_repeat$Isolate, levels=unique(file_isolates_repeat_orderIsolates$Isolate))
+  file_isolates_repeat$AgeGrp <- factor(file_isolates_repeat$AgeGrp, levels=AgeGroups_list)
+  
+  ## Plot repsize (tile plot), add repsize found from DBS DBLa tags (tile plot), parasite density (barplot)
+  WBrep_midpoint <- as.numeric(repsize_thres_popgen)
+  WBrep_minpoint <- min(file_isolates_repeat$NumTypes)
+  WBrep_maxpoint <- max(file_isolates_repeat$NumTypes)
+  WBMOI_maxpoint <- max(file_isolates_repeat$PfMOI)
+  
+  ## Replaced 0 with NA so that can color as white tiles
+  file_isolates_repeat <- file_isolates_repeat %>%
+    mutate(NumTypes = na_if(NumTypes, 0),
+           PfMOI = na_if(PfMOI, 0))
+  
+  ## Plot tile of repsize
+  plot_tile_repsize <- ggplot(file_isolates_repeat, aes(x=WBvol, y=Isolate, fill=as.numeric(NumTypes))) +
+    geom_tile() +
+    theme_bw() +
+    scico::scale_fill_scico(name="Repertoire\nsize",
+                            palette="vikO", na.value="white", 
+                            values=c(0, (WBrep_midpoint-WBrep_minpoint)/(WBrep_maxpoint-WBrep_minpoint), 1),
+                            breaks=c(1, 10, 20, seq(100, WBrep_maxpoint, 100)),
+                            limits=c(1, WBrep_maxpoint),
+                            begin=0, end=0.8, direction=-1) +
+    scale_x_discrete(name="Volume") +
+    scale_y_discrete(name="") +
+    theme(panel.grid=element_blank(),
+          axis.text.y=element_text(size=8),
+          axis.text.x=element_text(size=12),
+          axis.title.y=element_blank(),
+          legend.position="right",
+          legend.text=element_text(size=12),
+          legend.key.height=unit(2.5, "cm")) +
+    facet_grid(.~Repeat, space="free", scale="free") +
+    theme(strip.text=element_text(size=12))
+
+  ## Plot tile of MOI
+  plot_tile_MOI <- ggplot(file_isolates_repeat, aes(x=WBvol, y=Isolate, fill=as.numeric(PfMOI))) +
+    geom_tile() +
+    theme_bw() +
+    scale_fill_viridis_c(name="Pf-MOI", option="inferno", na.value="white",
+                        values=c(0, 0.2, 1),
+                        breaks=c(1, seq(1, WBMOI_maxpoint, 1)),
+                        limits=c(1, WBMOI_maxpoint),
+                        direction=-1, begin=0.15, end=1.0) +
+    scale_x_discrete(name="Volume") +
+    scale_y_discrete(name="Isolates") +
+    theme(panel.grid=element_blank(),
+          axis.text.y=element_text(size=8),
+          axis.text.x=element_text(size=12),
+          axis.title.y=element_blank(),
+          legend.position="right",
+          legend.text=element_text(size=12),
+          legend.key.height=unit(2.5, "cm")) +
+    facet_grid(.~Repeat, space="free", scale="free") +
+    theme(strip.text=element_text(size=12))
+  
+  ## Plot barplot for parasite density
+  plot_bar_parDen <- ggplot(file_isolates_repeat, aes(x=ParasiteuL, y=Isolate)) +
+    #geom_bar(stat="identity") +
+    geom_segment(aes(yend=Isolate), xend=0, color="grey") +
+    geom_point() +
+    theme_bw() +
+    scale_x_continuous(name="Parasite density",
+                       trans = scales::log10_trans(),
+                       breaks = scales::trans_breaks("log10", function(x) 10^x),
+                       labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    scale_y_discrete(name="") +
+    theme(panel.grid=element_blank(),
+          axis.text.y=element_blank(),
+          axis.text.x=element_text(size=12)) + 
+    facet_grid(.~"Parasite Density", space="free", scale="free") +
+    theme(strip.text.x=element_text(size=12),
+          strip.text.y=element_blank())
+  
+  ## Plot barplot for hrp2
+  plot_bar_hrp2 <- ggplot(file_isolates_repeat, aes(x=HRP2_Conc, y=Isolate)) +
+    geom_bar(stat="identity") +
+    theme_bw() +
+    scale_x_continuous(name="HRP2 concentration (ng/mL)") +
+    scale_y_discrete(name="Isolates") +
+    theme(panel.grid=element_blank(),
+          axis.text.y=element_blank(),
+          axis.text.x=element_text(size=12)) +
+    facet_grid(.~"Plasma HRP2", space="free", scale="free") +
+    theme(strip.text.x=element_text(size=12),
+          strip.text.y=element_blank())
+  
+  ##### COMBINE FIGURES
+  plot_combine_repsize <- ggarrange(plot_bar_hrp2, plot_bar_parDen, plot_tile_repsize,
+                                    nrow=1, widths=c(0.8, 0.8, 1.0),
+                                    align="h", hjust=0.08)
+  
+  plot_combine_MOI <- ggarrange(plot_bar_hrp2, plot_bar_parDen, plot_tile_MOI,
+                                nrow=1, widths=c(0.8, 0.8, 1.0),
+                                align="h", hjust=0.08)
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(plot_tile_repsize, paste0("Z03.REPEATS.out_RDS/0", PART, ".id", plotpid, ".REPEATS.repsize_species.TILE.PLOT.rds"))
+  saveRDS(plot_tile_MOI, paste0("Z03.REPEATS.out_RDS/0", PART, ".id", plotpid, ".REPEATS.MOI.TILE.PLOT.rds"))
+  
+  ## Save files in TIFF format
+  # ggsave(paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.repsize_species.TILE.tiff"),
+  #        plot_combine_repsize,
+  #        device="tiff", dpi=300,
+  #        width=10, height=10)
+  # 
+  # ggsave(paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.moi_species.TILE.tiff"),
+  #        plot_combine_MOI,
+  #        device="tiff", dpi=300,
+  #        width=10, height=10)
+  
+  ##### Delete variables
+  rm(file_isolates_repeat, file_isolates_repeat_orderIsolates, plot_tile_repsize, plot_tile_MOI, plot_bar_parDen, plot_bar_hrp2, plot_combine_MOI, plot_combine_repsize, WBrep_midpoint, WBrep_minpoint, WBrep_maxpoint, WBMOI_maxpoint, found_min_code, PART, PART_prev)
+}
+```
+
+# PART 20 [REPEAT]: Plot distributions of repsize and MOI for each WBvol
+```{r}
+PART=20
+PART_prev=PART-11
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_repeat <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_repeat_metadata.FINAL.rds"))
+  
+  ## Extract info
+  file_isolates_repeat <- file_isolates_repeat %>%
+    select(Isolate, WBvol, Repeat, NumTypes, PfMOI) %>%
+    pivot_longer(-c(Isolate, WBvol, Repeat), names_to="metric") %>%
+    mutate(metric=gsub("NumTypes", "Repertoire size", metric)) %>%
+    mutate(metric=gsub("PfMOI", "Pf-MOI", metric)) %>%
+    mutate(metric=factor(metric, levels=c("Repertoire size", "Pf-MOI"))) %>%
+    mutate(Repeat=factor(Repeat, levels=c("R1", "R2"))) %>%
+    mutate(WBvol=factor(WBvol, levels=WBvol_list)) #%>%
+    # mutate(value=ifelse(value == 0, NA, value))
+  
+  ##### Plot boxplots
+  ## Statistical test (Wilcoxon paired test with holm correction)
+  kw_pval_all <- data.frame()
+  
+  for (pw_metric in c("Repertoire size", "Pf-MOI")) {
+    
+    pw_metric_name <- case_when(pw_metric == "Repertoire size" ~ "repsize",
+                                pw_metric == "Pf-MOI" ~ "MOI")
+    
+    file_isolates_repeat_metric <- file_isolates_repeat %>%
+      filter(metric == pw_metric)
+    
+    kw_pval <- file_isolates_repeat_metric %>%
+      group_by(WBvol) %>%
+      pairwise_wilcox_test(value ~ Repeat,
+                           paired=TRUE,
+                           p.adjust.method="holm",
+                           comparisons=list(c("R1", "R2"))) %>% 
+      add_xy_position(x = "WBvol", step.increase=0.05) %>%
+      mutate(metric = pw_metric)
+    
+    ## Save
+    kw_pval_all <- rbind(kw_pval_all, kw_pval)
+
+    ## Count observations per boxplot
+    xlabs <- file_isolates_repeat_metric %>%
+      filter(!is.na(value)) %>%
+      select(Isolate, WBvol) %>%
+      unique()
+    
+    xlabs <- data.frame(label=levels(xlabs$WBvol), label_long=paste(levels(xlabs$WBvol),"\n(n=",table(xlabs$WBvol),")",sep=""))
+    
+    ## Plot (all non significant)
+    plot_paired_boxplot <- file_isolates_repeat_metric %>%
+      ggboxplot(., x = "WBvol", y = "value", id="Isolate",
+               line.color="gray", fill="Repeat",  line.size=0.4, line.type=NA) +
+      scale_fill_nejm(name="Volume") +
+      theme_bw() +
+      scale_x_discrete(name="Volume", labels=xlabs$label_long) +
+      scale_y_continuous(name=pw_metric, breaks=scales::pretty_breaks(10), limits=c(0,NA)) +
+      theme(legend.title=element_text(size=12),
+            legend.text=element_text(size=12),
+            panel.grid=element_blank(),
+            axis.text=element_text(size=12),
+            axis.title=element_text(size=12)) +
+      facet_wrap(metric~., scales="free") +
+      theme(strip.text=element_text(size=12))
+    
+    ## Save plots as variable
+    assign(paste0("pw_plotBoxplot_", pw_metric_name), plot_paired_boxplot)
+  }
+  
+  ##### COMBINE FIGURES
+  pw_plotBoxplots <- ggarrange(pw_plotBoxplot_repsize, pw_plotBoxplot_MOI, ncol=2, common.legend=TRUE)
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(pw_plotBoxplots, paste0("Z03.REPEATS.out_RDS/0", PART, ".id", plotpid, ".REPEATS.pairedWilcoxTest_repsize_MOI.BOX.PLOT.rds"))
+  
+  ## Save files in TIFF format
+  # ggsave(paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.repsizeonly.BOX.tiff"),
+  #        pw_plotBoxplot_repsize,
+  #        device="tiff", dpi=300,
+  #        width=6, height=6)
+  # ggsave(paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.MOIonly.BOX.tiff"),
+  #        pw_plotBoxplot_MOI,
+  #        device="tiff", dpi=300,
+  #        width=6, height=6)
+  # ggsave(paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.pairedWilcoxTest_repsize_MOI.BOX.tiff"),
+  #        pw_plotBoxplots,
+  #        device="tiff", dpi=300,
+  #        width=12, height=6)
+  
+  ## Save files in TXT format
+  write.table(unnest(kw_pval_all, groups), file=paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.pairedWilcox_pvals.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_repeat, kw_pval_all, kw_pval, pw_metric, pw_metric_name, file_isolates_repeat_metric, xlabs, plot_paired_boxplot, pw_plotBoxplot_repsize, pw_plotBoxplot_MOI, pw_plotBoxplots, PART, PART_prev)
+}
+```
+
+# PART 21 [REPEAT]: Plot concordance of repsize and MOI for each pair of WBvol
+```{r}
+PART=21
+PART_prev=PART-12
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_repeat <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_repeat_metadata.FINAL.rds"))
+
+  ## Extract info
+  file_isolates_repeat <- file_isolates_repeat %>%
+    select(Isolate, WBvol, Repeat, NumTypes, PfMOI) %>%
+    pivot_longer(-c(Isolate, WBvol, Repeat), names_to="metric") %>%
+    mutate(metric=gsub("NumTypes", "Repertoire size", metric)) %>%
+    mutate(metric=gsub("PfMOI", "Pf-MOI", metric)) %>%
+    mutate(metric=factor(metric, levels=c("Repertoire size", "Pf-MOI"))) %>%
+    mutate(Repeat=factor(Repeat, levels=c("R1", "R2"))) %>%
+    mutate(WBvol=factor(WBvol, levels=WBvol_list))
+  
+  ##### Plot scatter plots
+  ## Statistical test (Lin's concordance correlation coefficient)
+  CCC_df_all <- data.frame()
+  
+  for (pw_metric in c("Repertoire size", "Pf-MOI")) {
+    
+    pw_metric_name <- case_when(pw_metric == "Repertoire size" ~ "repsize",
+                                pw_metric == "Pf-MOI" ~ "MOI")
+    
+    file_isolates_repeat_metric <- file_isolates_repeat %>%
+      filter(metric == pw_metric)
+  
+    ## Empty df
+    file_isolates_repeat_metric_pivot <- data.frame()
+    CCC_df_metric <- data.frame()
+  
+    for (vol_pick in WBvol_list) {
+      
+      ## Temporary df to extract pairs of volumes
+      file_isolates_repeat_metric_tmp <- file_isolates_repeat_metric %>%
+        filter(WBvol==vol_pick) %>%
+        pivot_wider(names_from="Repeat", values_from="value")
+      
+      ## Save
+      file_isolates_repeat_metric_pivot <- rbind(file_isolates_repeat_metric_pivot, file_isolates_repeat_metric_tmp)
+        
+      ### Calculate Lin's concordance correlation coefficient
+      stat_ccc <- CCC(file_isolates_repeat_metric_tmp$R1,
+                      file_isolates_repeat_metric_tmp$R2,
+                      conf.level=0.95, na.rm=FALSE)
+      
+      ## Get linear line for plotting
+      stat_lm <- lm(file_isolates_repeat_metric_tmp$R2 ~ file_isolates_repeat_metric_tmp$R1)
+      alpha_val <- summary(stat_lm)$coefficients[1,1] %>% as.numeric()
+      beta_val <-  summary(stat_lm)$coefficients[2,1] %>% as.numeric()
+      
+      ## Add label & info to data frame
+      ccc <- round(stat_ccc$rho.c[,1], digits = 2)
+      low.95ci <- round(stat_ccc$rho.c[,2], digits = 2)
+      high.95ci <- round(stat_ccc$rho.c[,3], digits = 2)
+      
+      label_ccc <- paste0("CCC: ", ccc, "\n(95% CI ", low.95ci, " - ", high.95ci, ")")
+      
+      CCC_df_metric <- rbind(CCC_df_metric,
+                             cbind(as.numeric(0),
+                                   as.numeric(0.95*max(file_isolates_repeat_metric_tmp$R2)),
+                                   WBvol=vol_pick, label_ccc, ccc,
+                                   as.numeric(low.95ci), as.numeric(high.95ci),
+                                   as.numeric(alpha_val), as.numeric(beta_val)))
+    }
+    
+    ## Save
+    CCC_df_all <- rbind(CCC_df_all, CCC_df_metric)
+
+    ## Set factors
+    file_isolates_repeat_metric_pivot$WBvol <- factor(file_isolates_repeat_metric_pivot$WBvol, levels=WBvol_list)
+    CCC_df_metric$WBvol <- factor(CCC_df_metric$WBvol, levels=WBvol_list)
+    
+    ## Count observations per group - add to df
+    xlabs <- file_isolates_repeat_metric_pivot %>%
+      select(Isolate, WBvol) %>%
+      unique()
+    xlabs <- data.frame(label=levels(xlabs$WBvol), label_long=paste(levels(xlabs$WBvol),"\n(n=",table(xlabs$WBvol),")",sep=""))
+  
+    ## Add long labels
+    file_isolates_repeat_metric_pivot <- file_isolates_repeat_metric_pivot %>% left_join(., xlabs, by=c("WBvol"="label"))
+    CCC_df_metric <- CCC_df_metric %>% left_join(., xlabs, by=c("WBvol"="label"))
+    
+    file_isolates_repeat_metric_pivot$label_long <- factor(file_isolates_repeat_metric_pivot$label_long, levels=xlabs$label_long)
+    CCC_df_metric$label_long <- factor(CCC_df_metric$label_long, levels=xlabs$label_long)
+    
+    ## Plot
+    plot_scatter <- file_isolates_repeat_metric_pivot %>%
+      select(-Isolate) %>%
+      group_by(metric, label_long, R1, R2) %>%
+      summarise(pointsize=n()) %>%
+      ungroup() %>%
+      ggplot(., aes(x=R1, y=R2)) +
+      geom_point(aes(fill=label_long, size=pointsize), color="black", shape=21) +
+      geom_abline(intercept=0, slope=1, linewidth=0.5, linetype="dashed", color="black") +
+      geom_text(data=CCC_df_metric, aes(x=min(as.numeric(V1)), y=max(as.numeric(V2)), label=label_ccc), hjust=0) +
+      theme_bw() +
+      scale_x_continuous(name=paste0(pw_metric, " (R1)"), breaks=scales::pretty_breaks(),
+                         limits=c(0,NA)) +
+      scale_y_continuous(name=paste0(pw_metric, " (R2)"), breaks=scales::pretty_breaks(),
+                         limits=c(0,NA)) +
+      scale_size(name="Number of\nisolates") +
+      scale_fill_jco(name="Volume") +
+      theme(legend.position="top",
+            legend.title=element_text(size=12),
+            legend.text=element_text(size=12),
+            panel.grid=element_blank(),
+            axis.text=element_text(size=12),
+            axis.title=element_text(size=12)) +
+      facet_wrap(.~label_long, nrow=1) +
+      theme(strip.text=element_text(size=12))
+      
+    ## Save plots as variable
+    assign(paste0("pw_plotScatter_", pw_metric_name), plot_scatter)
+  }
+    
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(pw_plotScatter_MOI, paste0("Z03.REPEATS.out_RDS/0", PART, ".id", plotpid, ".REPEATS.MOI.SCATTER.PLOT.rds"))
+  
+  ## Save files in TIFF format
+  # ggsave(paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.Repsize.SCATTER.tiff"),
+  #        pw_plotScatter_repsize,
+  #        device="tiff", dpi=300,
+  #        width=12, height=4)
+  # ggsave(paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.MOI.SCATTER.tiff"),
+  #        pw_plotScatter_MOI,
+  #        device="tiff", dpi=300,
+  #        width=12, height=4)
+  
+  ## Save files in TXT format
+  write.table(CCC_df_all, file=paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.CCC_values.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_repeat, file_isolates_repeat_metric, file_isolates_repeat_metric_tmp, file_isolates_repeat_metric_pivot, CCC_df_all, pw_metric_name, vol_pick, CCC_df_metric, stat_ccc, stat_lm, alpha_val, beta_val, plot_scatter, ccc, high.95ci, low.95ci, label_ccc, pw_metric, pw_plotScatter_repsize, pw_plotScatter_MOI, PART, PART_prev)
+}
+```
+
+# PART 22 [REPEAT]: Calculate PTS (with >=20 type cutoff)
+```{r}
+PART=22
+PART_prev=PART-13
+PART_prev2=PART-20
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_repeat <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_repeat_metadata.FINAL.rds"))
+  file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".otutable_withUps.rds"))
+  
+  ## Exclude isolates with NumTypes >= 20
+  file_isolates_repeat <- file_isolates_repeat %>% filter(NumTypes >= repsize_thres_popgen)
+  
+  ## Get NumTypes for all isolates with NumTypes >= 20 in  any Repeat pair
+  file_isolates_repeat_IsolatesRepeatPairs <- file_isolates_repeat %>%
+    select(Isolate, WBvol, Repeat, NumTypes) %>%
+    pivot_wider(names_from=Repeat, values_from=NumTypes) %>%
+    filter(!is.na(R1) & !is.na(R2))
+    
+  ##### Calculate PTS
+  ## Empty df
+  isolates_PTS <- data.frame()
+  
+  ## Loop through samples to calculate PTS (pairwise comparisons)
+  for (row in 1:nrow(file_isolates_repeat_IsolatesRepeatPairs)) {
+    Isolate <- file_isolates_repeat_IsolatesRepeatPairs[row, "Isolate"] %>% as.character()
+    WBvol <- file_isolates_repeat_IsolatesRepeatPairs[row, "WBvol"] %>% as.character()
+    prefix <- paste0(Isolate, "-WB", gsub("uL", "", WBvol), "-R") %>% as.character()
+    samples <- file_isolates_repeat %>% filter(grepl(prefix, IsolateID))
+    
+    isolates_PTS <- file_otutable %>%
+      select(starts_with(prefix)) %>%
+      pairwiseType() %>%
+      PASmatrixToTable() %>%
+      mutate(label = WBvol) %>%
+      mutate(Isolate=Isolate) %>%
+      rbind(isolates_PTS, .)
+  }
+  rm(row, Isolate, WBvol, prefix, samples)
+  
+  ## Add MOI & diff information
+  file_isolates_repeat_MOI_ParDen <- file_isolates_repeat %>%
+    select(IsolateID, Isolate, WBvol, PfMOI, ParasiteuL, AgeGrp) %>%
+    unique()
+  
+  isolates_PTS_MOI <- isolates_PTS %>%
+    left_join(., file_isolates_repeat_MOI_ParDen, by=c("SampleID1"="IsolateID", "Isolate"="Isolate", "label"="WBvol")) %>%
+    dplyr::rename("Pf-MOI_A"="PfMOI") %>%
+    left_join(., file_isolates_repeat_MOI_ParDen, by=c("SampleID2"="IsolateID", "Isolate"="Isolate", "label"="WBvol", "AgeGrp"="AgeGrp", "ParasiteuL"="ParasiteuL")) %>%
+    dplyr::rename("Pf-MOI_B"="PfMOI")
+  
+  ## Set factors
+  isolates_PTS_MOI$label <- factor(isolates_PTS_MOI$label, levels=WBvol_list)
+  isolates_PTS_MOI$AgeGrp <- factor(isolates_PTS_MOI$AgeGrp, levels=AgeGroups_list)
+    
+  ### Plot PTS boxplots
+  xlabs <- data.frame(label=levels(isolates_PTS_MOI$label), label_long=paste(levels(isolates_PTS_MOI$label),"\n(n=",table(isolates_PTS_MOI$label),")",sep=""))
+  
+  plot_PTS_boxplots <- isolates_PTS_MOI %>%
+    ggplot(., aes(x=label, y=PAS_score, fill=label)) +
+    geom_boxplot() +
+    theme_bw() +
+    scale_x_discrete(name="Volume", labels=xlabs$label_long) +
+    scale_y_continuous(name="PTS (between R1 and R2)", limits=c(0,NA),
+                       breaks=scales::pretty_breaks(10)) +
+    scale_fill_jco(name="Volume") +
+    theme(legend.position="top",
+          legend.title=element_text(size=12),
+          legend.text=element_text(size=12),
+          panel.grid=element_blank(),
+          axis.text=element_text(size=12),
+          axis.title=element_text(size=12)) +
+    theme(strip.text=element_text(size=12))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(plot_PTS_boxplots, paste0("Z03.REPEATS.out_RDS/0", PART, ".id", plotpid, ".REPEATS.PTS_dist.BOX.PLOT.rds"))
+
+  ## Save files in TIFF format
+  # ggsave(paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.PTS_dist.BOX.tiff"),
+  #        plot_PTS_boxplots,
+  #        device="tiff", dpi=300,
+  #        width=6, height=6)
+  
+  ## Save files in TXT format
+  write.table(isolates_PTS_MOI, file=paste0("Z03.REPEATS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.PTS.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_repeat, file_otutable, file_isolates_repeat_IsolatesRepeatPairs, isolates_PTS, row, file_isolates_repeat_MOI_ParDen, isolates_PTS_MOI, xlabs, plot_PTS_boxplots, PART, PART_prev, PART_prev2)
+}
+```
+
+
+# ***** POPULATION
+# PART 24 [POPULATION]: For 188 isolates, DBLa richness, proportion of upsA/non-upsA, and number of isolates in each WBvol
+- summarise number of types per isolate per blood volume (individual, median, mean, min, max)
+- summarise number of isolates per blood volume
+- summarise DBLa richness per blood volume
+```{r}
+PART=24
+PART_prev=PART-15
+PART_prev2=PART-22
+
+for (plotpid in setpid) {
+  
+    ##### Read files
+    file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+    file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".otutable_withUps.rds"))
+    
+    ### Analyse isolates with >= 20 DBLa types
+    file_isolates_field <- file_isolates_field %>%
+      filter(NumTypes >= repsize_thres_popgen)
+  
+    ### Summarise number of types per isolate per blood volume
+    file_isolates_field_summary <- data.frame()
+    ## Summarise total
+    ## Group by WBvol
+    file_isolates_field_summary <- file_isolates_field %>%
+      group_by(WBvol) %>%
+      summarise(num_isolates=n(),
+                min_NumTypes = min(NumTypes),
+                max_NumTypes = max(NumTypes),
+                median_NumTypes = median(NumTypes),
+                mean_NumTypes = mean(NumTypes),
+                min_MOI = min(PfMOI),
+                max_MOI = max(PfMOI),
+                median_MOI = median(PfMOI),
+                mean_MOI = mean(PfMOI)) %>%
+      ungroup() %>%
+      mutate(AgeGrp="Total") %>%
+      relocate(., AgeGrp, .before=num_isolates) %>%
+      rbind(file_isolates_field_summary, .)
+    
+    ## Group by WBvol and Age group
+    file_isolates_field_summary <- file_isolates_field %>%
+      group_by(WBvol, AgeGrp) %>%
+      summarise(num_isolates=n(),
+                min_NumTypes = min(NumTypes),
+                max_NumTypes = max(NumTypes),
+                median_NumTypes = median(NumTypes),
+                mean_NumTypes = mean(NumTypes),
+                min_MOI = min(PfMOI),
+                max_MOI = max(PfMOI),
+                median_MOI = median(PfMOI),
+                mean_MOI = mean(PfMOI)) %>%
+      ungroup() %>%
+      relocate(., AgeGrp, .before=num_isolates) %>%
+      rbind(file_isolates_field_summary, .)
+    
+    ### Summarise DBLa richness per blood volume
+    info_DBLa_richness <- data.frame()
+    
+    for (vol in WBvol_list) {
+      ## List of isolates with DBLa seq data per blood vol
+      file_isolates_field_vol <- file_isolates_field %>%
+        filter(WBvol == vol)
+      ## Generate otu table per blood vol
+      file_otutable_vol <- file_otutable %>%
+        select("DBLa_type":"upsA_nonA", file_isolates_field_vol$IsolateID) %>%
+        mutate(dbla_freq = rowSums(across(file_isolates_field_vol$IsolateID))) %>%
+        relocate("dbla_freq", .after = "upsA_nonA") %>%
+        filter(dbla_freq > 0)
+      ## Get summary of richness per blood volume
+      info_DBLa_richness <- file_otutable_vol %>%
+        group_by(upsA_nonA) %>%
+        summarise(num_dbla=n()) %>%
+        ungroup() %>%
+        mutate(prop_dbla=num_dbla/sum(num_dbla)) %>%
+        mutate(WBvol = vol) %>%
+        rbind(info_DBLa_richness, .)
+      
+      ##### Save output
+      ## Save files in TXT format
+      write.table(file_otutable_vol, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.otutable_withUps.", vol, ".txt"), quote=FALSE, row.names=FALSE, sep="\t")
+    }
+    
+    ## Set factors
+    file_isolates_field_summary$WBvol <- factor(file_isolates_field_summary$WBvol, levels=WBvol_list)
+    file_isolates_field_summary$AgeGrp <- factor(file_isolates_field_summary$AgeGrp, levels=c("Total", AgeGroups_list))
+    info_DBLa_richness$WBvol <- factor(info_DBLa_richness$WBvol, levels=WBvol_list)
+    info_DBLa_richness$upsA_nonA <- factor(info_DBLa_richness$upsA_nonA, levels=ups_list)
+    
+    ### Plot number of isolates, DBLa richness, proportion of upsA/non-upsA per blood volume
+    ## 1.1) Get coefficient
+    coeff <- 50 #max(file_isolates_field_summary$num_isolates)
+    
+    ## 1.2) Plot number of isolates & DBLa richness
+    plot_numIsolates_richness <- ggplot(info_DBLa_richness, aes(x=WBvol, y=num_dbla)) +
+      #geom_bar(aes(fill=upsA_nonA), stat="identity") + # color by ups group
+      geom_bar(stat="identity") + # color by total
+      geom_point(filter(file_isolates_field_summary, AgeGrp=="Total"), mapping=aes(x=WBvol, y=num_isolates*coeff)) +
+      geom_line(filter(file_isolates_field_summary, AgeGrp=="Total"), mapping=aes(x=WBvol, y=num_isolates*coeff, group=1)) +
+      theme_bw() +
+      scale_y_continuous(name=expression(paste("DBL", alpha, " type richness")),
+                         sec.axis=sec_axis(~./coeff, name="Number of isolates"),
+                         breaks=scales::pretty_breaks(10)) +
+      scale_x_discrete(name="Volume") +
+      scale_fill_manual(values=c(palette_upsA[3], `palette_non-upsA`[3])) +
+      theme(legend.title=element_blank(),
+            legend.text=element_text(size=12),
+            panel.grid=element_blank(),
+            axis.text=element_text(size=12),
+            axis.title=element_text(size=14))
+    
+    plot_numIsolates_upsProp <- ggplot(info_DBLa_richness, aes(x=WBvol, y=num_dbla)) +
+      geom_bar(aes(fill=upsA_nonA), stat="identity", position="fill") + # color by ups group
+      theme_bw() +
+      scale_y_continuous(name=expression(paste("ups group proportions")),
+                         breaks=scales::pretty_breaks(10)) +
+      scale_x_discrete(name="Volume") +
+      scale_fill_manual(values=c(palette_upsA[3], `palette_non-upsA`[3])) +
+      theme(legend.title=element_blank(),
+            legend.text=element_text(size=12),
+            panel.grid=element_blank(),
+            axis.text=element_text(size=12),
+            axis.title=element_text(size=14))
+    
+    ## 1.3) Plot number of isolates by age group
+    plot_numIsolates_age <- file_isolates_field_summary %>%
+      filter(AgeGrp != "Total") %>%
+      ggplot(., aes(x=WBvol, y=num_isolates, group=AgeGrp, color=AgeGrp)) +
+      geom_point() +
+      geom_line() +
+      theme_bw() +
+      scale_y_continuous(name=paste0("Number of isolates"), limits=c(0,45),
+                         breaks=scales::pretty_breaks(10)) +
+      scale_x_discrete(name="Volume") +
+      theme(panel.grid=element_blank())
+    
+    ## 2) Plot proportion of upsA/non-upsA
+    plot_ups_prop <- ggplot(info_DBLa_richness, aes(x=WBvol, y=prop_dbla)) +
+      geom_bar(aes(fill=upsA_nonA), stat="identity", position="stack") +
+      theme_bw() +
+      scale_y_continuous(name=expression(paste("Proportion of DBL", alpha, " types")),
+                         breaks=scales::pretty_breaks(10)) +
+      scale_x_discrete(name="Blood volume") +
+      scale_fill_manual(values=c(palette_upsA[3], `palette_non-upsA`[3])) +
+      theme(legend.title=element_blank(),
+            panel.grid=element_blank())
+    
+  ##### COMBINE FIGURES
+  plot_combine <- ggarrange(plot_numIsolates_richness,
+                            plot_ups_prop, ncol=1,
+                            align="hv", common.legend=TRUE)
+
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(plot_numIsolates_richness, paste0("Z04.POPULATION.out_RDS/0", PART, ".id", plotpid, ".FIELD_POP.numisolates_richness.BAR.rds"))
+  saveRDS(plot_numIsolates_upsProp, paste0("Z04.POPULATION.out_RDS/0", PART, ".id", plotpid, ".FIELD_POP.numisolates_upsProp.BAR.rds"))
+  
+  ## Save files in TXT format
+  write.table(file_isolates_field_summary, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.info_repsizeMOI_isolates.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  write.table(info_DBLa_richness, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.info_DBLa_richness.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+
+  ##### Delete variables
+  rm(file_isolates_field, file_otutable, file_isolates_field_summary, info_DBLa_richness, vol, file_isolates_field_vol, file_otutable_vol, coeff, plot_numIsolates_richness, plot_ups_prop, plot_combine)
+}
+```
+
+# PART 25 [POPULATION]: PTS calculate between isolates within same WBvol (>=20 DBLa types)
+```{r}
+PART=25
+PART_prev=PART-16
+PART_prev2=PART-23
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".otutable_withUps.rds"))
+  
+  ## Analyse isolates with >= 20 DBLa types
+  file_isolates_field <- file_isolates_field %>%
+    filter(NumTypes >= repsize_thres_popgen)
+    
+  ### Calculate PTS
+  ## Empty df
+  isolates_PTS <- data.frame() # isolates have data in all WBvols
+  isolates_list <- data.frame()
+  
+  for (vol in WBvol_list) {
+    file_isolates_field_select <- file_isolates_field %>%
+      filter(WBvol == vol)
+    
+    isolates_PTS <- file_otutable %>%
+      select(file_isolates_field_select$IsolateID) %>%
+      pairwiseType() %>%
+      PASmatrixToTable() %>%
+      mutate(label = vol) %>%
+      rbind(isolates_PTS, .)
+    
+    isolates_list <- file_isolates_field_select %>%
+      select(Isolate, WBvol) %>%
+      unique() %>%
+      rbind(isolates_list, .)
+  }
+  
+  ## Set factors
+  isolates_PTS$label <- factor(isolates_PTS$label, levels=WBvol_list)
+  isolates_list$WBvol <- factor(isolates_list$WBvol, levels=WBvol_list)
+  
+  ## PTS_AtoB
+  ## Count observations per boxplot
+  xlabs <- isolates_list
+  xlabs <- paste(levels(xlabs$WBvol),"\n(n=",table(xlabs$WBvol),")",sep="")
+  
+  ## Statistical test (Kruskal-Wallis + Dunn multiple test with holm correction)
+  stats_pval_kw <- isolates_PTS %>%
+    kruskal_test(PAS_score ~ label) %>%
+    mutate(Test = "Kruskal-Wallis")
+  
+  stats_pval_dunn <- isolates_PTS %>%
+    dunn_test(PAS_score ~ label, p.adjust.method = "holm", detailed=TRUE) %>%
+    mutate(Test = "Dunn's test") %>%
+    add_xy_position(x = "label", step.increase=0.1)
+
+  ## Get summary
+  isolates_PTS_summary <- isolates_PTS %>%
+    group_by(label) %>%
+    summarise(min=min(PAS_score),
+              max=max(PAS_score),
+              mean=mean(PAS_score),
+              median=median(PAS_score),
+              Q1=quantile(PAS_score, probs=0.25),
+              Q3=quantile(PAS_score, probs=0.75))
+
+  ## Plot PTS
+  plot_PTS_AB <- isolates_PTS %>%
+    ggplot(., aes(x=label, y=PAS_score)) +
+    geom_violin(aes(fill=label)) +
+    geom_boxplot(width=0.1) +
+    #stat_compare_means() +
+    stat_pvalue_manual(stats_pval_dunn, xmin="group1", xmax="group2", label="p.adj.signif", hide.ns=TRUE, tip.length=0, vjust=0.7) +
+    #stat_summary(fun.data=fun_n_high, geom="text", hjust=0.5) +
+    theme_bw() +
+    labs(fill="Volume") +
+    scale_x_discrete(name="Volume", labels=xlabs) +
+    scale_y_continuous(name="PTS", breaks=scales::pretty_breaks(10), limits=c(0,1)) +
+    scale_fill_jco(name="") +
+    theme(legend.position="right",
+          legend.text=element_text(size=12),
+          panel.grid=element_blank(),
+          axis.text=element_text(size=12),
+          axis.title=element_text(size=14))
+  
+  ### Plot population PTS by MOI
+  ## Add MOI information
+  file_isolates_field_MOI <- file_isolates_field %>%
+    select(IsolateID, PfMOI)
+  
+  isolates_PTS_MOI <- isolates_PTS %>%
+    left_join(., file_isolates_field_MOI, by=c("SampleID1"="IsolateID")) %>%
+    dplyr::rename("Pf-MOI_A"="PfMOI") %>%
+    left_join(., file_isolates_field_MOI, by=c("SampleID2"="IsolateID")) %>%
+    dplyr::rename("Pf-MOI_B"="PfMOI")
+
+  ### Save output
+  ## Save files in RDS format
+  saveRDS(isolates_PTS, paste0("Z04.POPULATION.out_RDS/0", PART, ".id", plotpid, ".FIELD_POP.PTS_allObservations.rds"))
+  saveRDS(plot_PTS_AB, paste0("Z04.POPULATION.out_RDS/0", PART, ".id", plotpid, ".FIELD_POP.PTS_allObservations.VIOLIN.PLOT.rds"))
+  
+  ## Save files in TIFF format
+  # ggsave(paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.PTS_allObservations.VIOLIN.tiff"),
+  #        plot_PTS_AB,
+  #        device="tiff", dpi=300,
+  #        width=6, height=7)
+  
+  ## Save files in TXT format
+  write.table(isolates_PTS, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.PTS_allObservations.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  write.table(isolates_PTS_summary, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.PTS_allObservations.summary.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_field, file_otutable, isolates_PTS, file_isolates_field_MOI, isolates_list, isolates_PTS_MOI, isolates_PTS_summary, vol, file_isolates_field_select, stats_pval_dunn, stats_pval_kw, xlabs, plot_PTS_AB, PART, PART_prev, PART_prev2)
+}
+```
+
+# PART 26 [POPULATION]: Proportion of DBLa types found in DBS&WB, DBSonly, WBonly (>=20 DBLa types)
+```{r}
+PART=26
+PART_prev=PART-25
+PART_prev2=PART-17
+PART_prev3=PART-24
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  S8_DBS_data <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".S8MRS_DBS_MOI.", file_prefix, ".rds")) # used this to have a clear estimate of asymptomatic isolates in S8 Bongo
+  file_isolates_dbs <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".isolates_DBS_metadata.FINAL.rds"))
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev3, ".id", plotpid, ".otutable_withUps.rds"))
+  
+  ## Analyse only DBS isolates from KT set
+  # Get MOI > 0
+  S8_DBS_data_select <- S8_DBS_data %>%
+    filter(!is.na(MOI)) %>%
+    select(SeqID) %>%
+    mutate(SeqID = gsub(".MID", "-DBS.MID", SeqID))
+  file_isolates_dbs <- file_isolates_dbs %>%
+    filter(IsolateID %in% S8_DBS_data_select$SeqID)
+
+  ### Analyse isolates with >= 20 DBLa types
+  file_isolates_all <- rbind(file_isolates_dbs, file_isolates_field) %>%
+    filter(NumTypes >= repsize_thres_popgen)
+  
+  ## Total frequencies: Sum number of WB isolates for each DBLa type to get raw and proportional freqs
+  file_otutable_freqs <- file_otutable %>%
+    select("DBLa_type":"upsA_nonA", file_isolates_all$IsolateID) %>%
+    mutate(Count_total = rowSums(across(file_isolates_all$IsolateID))) %>% # Raw freq overall
+    mutate(Proportional_total = Count_total/length(file_isolates_all$IsolateID)) # Proportional freq overall
+
+  ## Remove DBLa types with total frequency == 0
+  file_otutable_freqs <- file_otutable_freqs %>%
+    filter(Count_total > 0)
+    
+  ### Report counts and proportional frequencies per time point
+  ## Loop through time points
+  for (vol in c("DBS", WBvol_list)) {
+    ## Create column names
+    find <- paste0("Count_", vol)
+    pfind <- paste0("Proportional_", vol)
+  
+    ## Get correct sample IDs per survey
+    file_isolates_all_vol <- filter(file_isolates_all, WBvol == vol)
+
+    ## Sum number of isolates (raw frequencies) with the same DBLa type
+    file_otutable_freqs <- file_otutable_freqs %>%
+      mutate(Count_tmpvar = rowSums(across(file_isolates_all_vol$IsolateID))) %>% # Sum raw freq per time
+      mutate(Proportional_tmpvar = Count_tmpvar/length(file_isolates_all_vol$IsolateID)) %>% # Calculate proportional freq per time
+      dplyr::rename(!!find := "Count_tmpvar") %>% # Rename column
+      dplyr::rename(!!pfind := "Proportional_tmpvar") # Rename column
+  }
+  rm(vol, find, pfind, file_isolates_all_vol)
+  
+  ### Rearrange columns
+  file_otutable_freqs <- file_otutable_freqs %>%
+    select("DBLa_type":"upsA_nonA", "Count_total":"Proportional_100uL") %>%
+    select(-c("Count_total", "Proportional_total"))
+    
+  ### Merge with S8MRS DBS + WB info
+  ## Function to add detection info
+  fun_add_DBSWBvol <- function(in_df, DBScol, WBcol, WBvol) {
+    newcolname <- paste0("Detect_DBS_", WBvol)
+    in_df %>%
+      mutate(newcoltmp=case_when((.data[[DBScol]]>=1 & .data[[WBcol]]>=1) ~ "DBS & pRBC",
+                                 (.data[[DBScol]]>=1 & .data[[WBcol]]==0) ~ "DBS only",
+                                 (.data[[DBScol]]==0 & .data[[WBcol]]>=1) ~ "pRBC only",
+                                 (.data[[DBScol]]==0 & .data[[WBcol]]==0) ~ "Missing data",
+                                 TRUE ~ "Missing data")) %>%
+      dplyr::rename(!!newcolname:=newcoltmp)
+  }
+  
+  file_otutable_freqs <- file_otutable_freqs %>%
+    replace(., is.na(.), 0) %>%
+    fun_add_DBSWBvol(., "Count_DBS", "Count_1uL", "1uL") %>%
+    fun_add_DBSWBvol(., "Count_DBS", "Count_10uL", "10uL") %>%
+    fun_add_DBSWBvol(., "Count_DBS", "Count_50uL", "50uL") %>%
+    fun_add_DBSWBvol(., "Count_DBS", "Count_100uL", "100uL")
+  
+  ## Calculate proportions of DBLa types (total)
+  file_otutable_freqs_prop <- file_otutable_freqs %>%
+    select("DBLa_type", "upsA_nonA", starts_with("Detect_")) %>%
+    mutate("tot_DBLa" = nrow(.)) %>%
+    pivot_longer(-c("DBLa_type", "upsA_nonA", "tot_DBLa")) %>%
+    filter(value!="Missing data")%>%
+    group_by(name, value) %>%
+    summarise(n=n()) %>%
+    mutate(prop=n/sum(n)) %>%
+    ungroup() %>%
+    mutate(name=gsub("Detect_DBS_", "", name)) %>%
+    mutate(name=factor(name, levels=WBvol_list)) %>%
+    mutate(value=factor(value, levels=c("DBS & pRBC", "pRBC only", "DBS only")))
+  
+  ## Plot prop bar plots
+  plot_DBS_WB <- file_otutable_freqs_prop %>%
+    ggplot(., aes(x=name, y=prop, fill=value, group=value, shape=value)) +
+    geom_bar(stat="identity") +
+    theme_bw() +
+    scale_fill_nejm(name="") +
+    scale_x_discrete(name="Volume") +
+    scale_y_continuous(name=expression(paste("Proportion of DBL", alpha, " types", sep="")), breaks=scales::pretty_breaks(), limits=c(0,1)) +
+    theme(legend.position="right",
+          legend.text=element_text(size=12),
+          panel.grid=element_blank(),
+          axis.text=element_text(size=12),
+          axis.title=element_text(size=14))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(plot_DBS_WB, paste0("Z04.POPULATION.out_RDS/0", PART, ".id", plotpid, ".FIELD_POP.DBS_WB_propDBLa.BAR.PLOT.rds"))
+  
+  ## Save files in TIFF format
+  ggsave(paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.DBS_WB_propDBLa.BAR.tiff"),
+         plot_DBS_WB,
+         device="tiff", dpi=300,
+         width=8, height=5)
+  
+  ## Save files in TXT format
+  write.table(file_otutable_freqs_prop, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.DBS_WB_propDBLa.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_dbs, file_isolates_field, file_isolates_all, file_otutable, file_otutable_freqs, file_otutable_freqs_prop, plot_DBS_WB, PART, PART_prev, PART_prev2)
+}
+
+```
+
+# PART 27 [POPULATION]: Rarecurves of sequences (>=20 DBLa types)
+```{r}
+PART=27
+PART_prev=PART-18
+PART_prev2=PART-25
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_dbs <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_DBS_metadata.FINAL.rds"))
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".otutable_withUps.rds"))
+
+  ### Analyse isolates with >= 20 DBLa types
+  file_isolates_all <- rbind(file_isolates_dbs, file_isolates_field) %>%
+    filter(NumTypes >= repsize_thres_popgen)
+
+  ## Empty df
+  rarecurve_data_ALL <- data.frame()
+
+  ### Get DBLa types in different ups groups
+  ## Get isolates from different WBvol
+  for (ups in ups_list) {
+
+    ## Select DBLa in upsA/non-upsA groups
+    file_otutable_ups <- file_otutable %>%
+      filter(upsA_nonA==ups) %>%
+      select("DBLa_type", file_isolates_all$IsolateID)
+
+    ## Transpose otu table
+    file_otutable_ups_t <- data.table::transpose(file_otutable_ups)
+
+    ## Add row names
+    file_otutable_ups_t$Samples <- colnames(file_otutable_ups)
+
+    ## Add otu table info
+    file_otutable_ups_t <- file_otutable_ups_t %>%
+      data.frame() %>%
+      right_join(., file_isolates_all, by=c("Samples"="IsolateID")) %>%
+      select(-c("Samples", "Isolate", "MID":"cpd_id_ML", "age":"found_min20_code")) %>%
+      select("WBvol", "AgeGrp", everything())
+
+    ## Convert data to numeric
+    #file_otutable_ups_t_labels <- paste0(otutable_t$WBvol, ", ", otutable_t$AgeGrp) # Set label as WBvol and AgeGrp
+    file_otutable_ups_t_labels <- file_otutable_ups_t$WBvol # Set label as WBvol only
+    file_otutable_ups_t_numeric <- mutate_all(file_otutable_ups_t[,-c(1:2)], function(x) as.numeric(as.character(x)))
+    file_otutable_ups_t_new <- cbind(file_otutable_ups_t_labels, file_otutable_ups_t_numeric)
+    colnames(file_otutable_ups_t_new)[which(names(file_otutable_ups_t_new) == "file_otutable_ups_t_labels")] <- "Dataset"
+
+    ### Vegan rarefy
+    ## Sum across individuals to get # seqs per survey
+    file_otutable_ups_t_sums <- file_otutable_ups_t_new %>%
+      group_by(Dataset) %>%
+      dplyr::summarise(across(where(is.numeric), ~ sum(.x, na.rm = TRUE))) %>%
+      ungroup() %>%
+      as.data.frame()
+
+    ## Replace rownames with survey numbers and remove Survey column from df
+    rownames(file_otutable_ups_t_sums) <- file_otutable_ups_t_sums$Dataset
+    file_otutable_ups_t_sums <- file_otutable_ups_t_sums[,-1]
+
+    ## Rarefy data
+    rarecurve_data <- rarecurve(file_otutable_ups_t_sums, step=100)
+
+    ## get data from rarefication
+    rarecurve_data_ALL <- map_dfr(rarecurve_data, bind_rows) %>%
+      bind_cols(Dataset = rownames(file_otutable_ups_t_sums),.) %>%
+      pivot_longer(-Dataset) %>%
+      drop_na() %>%
+      mutate(n_seqs = as.numeric(str_replace(name, "N", ""))) %>%
+      select(-name) %>%
+      mutate(ups = ups) %>%
+      rbind(rarecurve_data_ALL, .)
+  }
+  
+  ## READ DATA
+  # rarecurve_data_ALL <- readRDS(paste0("Z04.POPULATION.out_RDS/0", PART, ".id", plotpid, ".FIELD_POP.rarecurve_data_ups.rds"))
+  
+  ## Set factor
+  rarecurve_data_ALL$ups <- factor(rarecurve_data_ALL$ups, levels=ups_list)
+  rarecurve_data_ALL$Dataset <- factor(rarecurve_data_ALL$Dataset, levels=c(WBvol_list, "DBS"))
+
+  ## Plot curves
+  plot_rarecurve <- ggplot(rarecurve_data_ALL, aes(x=n_seqs, y=value, group=Dataset, color=Dataset)) +
+    geom_line() +
+    geomtextpath::geom_textline(aes(x=n_seqs, y=value, group=Dataset, label=Dataset), size=3, hjust=1.02, vjust=1.3) +
+    theme_bw() +
+    scale_y_continuous(name=expression(paste("Number of DBL", alpha, " types", sep="")),
+                       labels=scales::comma, breaks=scales::pretty_breaks(8)) +
+    scale_x_continuous(name=expression(paste("Number of DBL", alpha, " tags sampled", sep="")),
+                       labels=scales::comma, breaks=scales::pretty_breaks(8)) +
+    scale_color_jco(name="") +
+    theme(legend.key.size=unit(1, 'cm'),
+          legend.text=element_text(size=12),
+          legend.position="right", 
+          panel.grid=element_blank(),
+          plot.title=element_text(size=14, hjust=0.5),
+          axis.title=element_text(size=12),
+          axis.text=element_text(size=10),
+          strip.text.x=element_text(size=12)) +
+    facet_wrap(.~ups, scales="free") +
+    theme(strip.text=element_text(size=12))
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(rarecurve_data_ALL, paste0("Z04.POPULATION.out_RDS/0", PART, ".id", plotpid, ".FIELD_POP.rarecurve_data_ups.rds"))
+  
+  ## Save files in TIFF format
+  ggsave(paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.rarecurves_ups.LINE.tiff"),
+         plot_rarecurve,
+         device="tiff", dpi=300,
+         width=12, height=5)
+  
+  ## Save files in TXT format
+  write.table(rarecurve_data_ALL, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.rarecurve_data_ups.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(file_isolates_dbs, file_isolates_field, file_otutable, file_isolates_all, file_otutable_ups, file_otutable_ups_t, file_otutable_ups_t_labels, file_otutable_ups_t_numeric, file_otutable_ups_t_new, file_otutable_ups_t_sums, rarecurve_data, rarecurve_data_ALL, plot_rarecurve, PART, PART_prev, PART_prev2)
+}
+```
+
+# ***** EXPORT DATA
+# PART 29: Save data tables
+```{r}
+PART=29
+PART_prev=PART-20
+PART_prev2=PART-27
+PART_prev3=PART-28
+
+for (plotpid in setpid) {
+  
+  ##### Read files
+  file_isolates_field <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_field_metadata.FINAL.rds"))
+  
+  file_isolates_dbs <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_DBS_metadata.FINAL.rds"))
+
+  file_isolates_repeat <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".isolates_repeat_metadata.FINAL.rds"))
+  
+  file_otutable <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev2, ".id", plotpid, ".otutable_withUps.rds"))
+  
+  file_fasta <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev3, ".id", plotpid, ".DBS_PilotS1to8_WB_S8MRS_centroids.", file_prefix, ".rds"))
+  
+  ## Report data for supplementary in publication
+  dt_field <- file_isolates_field %>% select(Isolate, IsolateID, Survey, MRS, study_id, WBvol, MID, Pool, Control, Repeat, AgeGrp, sex_ML, catchmentarea_ML, village_ML, rdt, HRP2_Conc, ParaGrp_SLIDE, ParasiteuL, starts_with("DBS_"), starts_with("WB100_"), PfMOI, PmMOI, PocMOI, PowMOI, upsA, `non-upsA`, NumTypes, found_min1_code, found_min20_code)
+  
+  dt_dbs <- file_isolates_dbs %>% select(Isolate, IsolateID, Survey, MRS, study_id, WBvol, MID, Pool, Control, Repeat, AgeGrp, sex_ML, catchmentarea_ML, village_ML, rdt, HRP2_Conc, ParaGrp_SLIDE, ParasiteuL, starts_with("DBS_"), starts_with("WB100_"), PfMOI, PmMOI, PocMOI, PowMOI, upsA, `non-upsA`, NumTypes, found_min1_code, found_min20_code)
+  
+  dt_repeat <- file_isolates_repeat %>% select(Isolate, IsolateID, Survey, MRS, study_id, WBvol, MID, Pool, Control, Repeat, AgeGrp, sex_ML, catchmentarea_ML, village_ML, rdt, HRP2_Conc, ParaGrp_SLIDE, ParasiteuL, starts_with("DBS_"), starts_with("WB100_"), PfMOI, PmMOI, PocMOI, PowMOI, upsA, `non-upsA`, NumTypes, found_min1_code, found_min20_code)
+  
+  ## Extract sequences from fasta based on otutable
+  ## First rename headers in fasta file
+  new_names <- gsub(";.*$", "", names(file_fasta))
+  names(file_fasta) <- new_names
+  ## Then, extract specific sequences
+  seqlist <-  data.frame(seq=file_otutable$DBLa_type)
+  filtered_fasta <-  file_fasta[names(file_fasta) %in% seqlist$seq]
+  
+  ## Get data for Jess - she needs parasitaemia data, including which are Pf only isolates
+  jess_df <- file_isolates_field %>% filter(WBvol == "100uL") %>% select(Isolate, Survey, MRS, study_id, AgeGrp, sex_ML, catchmentarea_ML, village_ML, rdt, HRP2_Conc, ParaGrp_SLIDE, ParasiteuL, starts_with("DBS_"), starts_with("WB100_"), PfMOI, PmMOI, PocMOI, PowMOI)
+  
+  ##### Save files
+  write.table(dt_field, file=paste0("Z05.DATA_OUTPUT_GITHUB/0", PART, ".id", plotpid, ".isolates_field_output.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  write.table(dt_dbs, file=paste0("Z05.DATA_OUTPUT_GITHUB/0", PART, ".id", plotpid, ".isolates_dbs_output.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  write.table(dt_repeat, file=paste0("Z05.DATA_OUTPUT_GITHUB/0", PART, ".id", plotpid, ".isolates_repeat_output.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  write.table(file_otutable, file=paste0("Z05.DATA_OUTPUT_GITHUB/0", PART, ".id", plotpid, ".otutable_output.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  writeXStringSet(filtered_fasta, filepath=paste0("Z05.DATA_OUTPUT_GITHUB/0", PART, ".id", plotpid, ".centroids_output.fasta"))
+  
+  write.csv(jess_df, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.Jess_parasitaemia.csv"), quote=FALSE, row.names=FALSE)
+  
+  ## Delete variables
+  rm(file_isolates_field, dt_field, dt_dbs, dt_repeat, jess_df, file_otutable, file_fasta, filtered_fasta)
+}
+```
+
+# ***** PREVALENCE SCALE UP by VOLUME - MAPS
+# PART 30.1: Prevalences in Malaria Atlas Project MAPs data (Ghana, UpperEast, Bongo)
+Note: 2-10yr children
+```{r}
+PART=30
+PART_prev=PART-29
+
+##### Read files
+file_MAPs_subnational_file <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".GADM_map_data.", file_prefix, ".rds"))
+
+# Subset columns and get most recent data per country. Depending on your data, some of this
+# may not be relevant
+MAPs_data_subset <- file_MAPs_subnational_file %>%
+  filter(Year=="2020") %>%
+  filter(Metric=="Infection Prevalence") %>%
+  filter(`National Unit`=="Ghana") %>%
+  mutate(Name=gsub("Northern East", "North East", Name)) %>%
+  mutate(Species="Pf") %>%
+  mutate(AgeGrp="2-10") %>%
+  mutate(MapType="Malaria Atlas (2-10yr)")
+
+# Add NA for Pm and Po due to absence of MAPs data
+MAPs_data_subset <- MAPs_data_subset %>%
+  filter(Name=="Upper East" & Species=="Pf") %>%
+  mutate(Species=gsub("Pf", "Pm", Species)) %>%
+  mutate(Value=NA) %>%
+  rbind(MAPs_data_subset, .)
+
+# Add NA for Pm and Po due to absence of MAPs data
+MAPs_data_subset <- MAPs_data_subset %>%
+  filter(Name=="Upper East" & Species=="Pf") %>%
+  mutate(Species=gsub("Pf", "Po", Species)) %>%
+  mutate(Value=NA) %>%
+  rbind(MAPs_data_subset, .)
+
+##### Save output
+## Save files in RDS format
+saveRDS(MAPs_data_subset, paste0("Z06.IMPACT_MAPS.out_RDS/0", PART, ".MAPs_prevalence_data.rds"))
+
+## Save files in TXT format
+write.table(MAPs_data_subset, file=paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".MAPs_prevalence_data.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+```
+
+# PART 30.2: Prevalences in S8 DBS varcoding data (Bongo)
+Note: Age group 1 - extract 2-10yr to compare with MAPs
+Note: Age group 2 - extract all ages to compare with MAPs
+Note: Age group 3 - extract 0-9yr, 10-19yr, 20-39yr, 40+ to compare with age dist data for scale up
+```{r}
+PART=30
+PART_prev=PART-29
+PART_prev2=PART-20
+
+##### Read files
+S8_DBS_data <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".S8MRS_DBS_MOI.", file_prefix, ".rds")) # used this to have a clear estimate of asymptomatic isolates in S8 Bongo
+S8_WB_prevalence_FD <- readRDS(paste0("Z02.FIELD.out_RDS/0", PART_prev2, ".id", plotpid, ".FIELD.file_isolates_CasesFD.rds")) %>%
+  select(Species, AgeGrp, cases_fold_diff) %>% filter(AgeGrp == "All")
+
+## Make age group labels
+S8_DBS_data_agegrp <- S8_DBS_data %>%
+  filter(Survey == 8) %>%
+  mutate(age_group_1 = case_when(age >= 2 & age <= 10 ~ "2-10",
+                                 .default = "other")) %>%
+  mutate(age_group_2 = "All")
+
+## Prevalence by species (S8 DBS, 2-10yr) - Age Group 1
+prev_data_agegrp_1 <- S8_DBS_data_agegrp %>%
+  dplyr::select(study_id, AgeGrp="age_group_1", PfPCR, PmPCR, PoPCR, PvPCR) %>%
+  filter(AgeGrp == "2-10") %>%
+  pivot_longer(-c(study_id, AgeGrp), names_to="Species") %>%
+  mutate(Species=gsub("PCR", "", Species)) %>%
+  mutate(value=gsub("(Pf|Pm|Po|Pv) ", "", value)) %>%
+  group_by(AgeGrp, Species, value) %>%
+  summarise(n=n()) %>%
+  ungroup(value) %>%
+  mutate(Prevalence=n/sum(n)*100) %>%
+  filter(value == "PCR +") %>%
+  mutate(Country="Ghana",
+         District="Bongo",
+         MapType="Survey DBS (2-10yr)")
+
+## Prevalence by species (S8 DBS, all ages) - Age Group 2
+prev_data_agegrp_2 <- S8_DBS_data_agegrp %>%
+  dplyr::select(study_id, AgeGrp="age_group_2", PfPCR, PmPCR, PoPCR, PvPCR) %>%
+  pivot_longer(-c(study_id, AgeGrp), names_to="Species") %>%
+  mutate(Species=gsub("PCR", "", Species)) %>%
+  mutate(value=gsub("(Pf|Pm|Po|Pv) ", "", value)) %>%
+  group_by(AgeGrp, Species, value) %>%
+  summarise(n=n()) %>%
+  ungroup(value) %>%
+  mutate(Prevalence=n/sum(n)*100) %>%
+  filter(value == "PCR +") %>%
+  mutate(Country="Ghana",
+         District="Bongo",
+         MapType="Survey DBS (all ages)")
+
+## Prevalence by species (S8 DBS, all ages) - Age Group 2
+prev_data_agegrp_2_adjust100uL <- prev_data_agegrp_2 %>%
+  left_join(., S8_WB_prevalence_FD, by=c("Species"="Species", "AgeGrp"="AgeGrp")) %>%
+  mutate(Prevalence=Prevalence * cases_fold_diff) %>%
+  select(-cases_fold_diff) %>%
+  mutate(MapType="Survey DBS (all ages) - adjusted for deep sampling")
+
+## Combine
+S8MRS_prevalence_data_ALL <- rbind(prev_data_agegrp_1, prev_data_agegrp_2, prev_data_agegrp_2_adjust100uL)
+
+##### Save output
+## Save files in RDS format
+saveRDS(S8MRS_prevalence_data_ALL, paste0("Z06.IMPACT_MAPS.out_RDS/0", PART, ".S8MRS_DBS_prevalence_data_ALL.rds"))
+
+## Save files in TXT format
+write.table(S8MRS_prevalence_data_ALL, file=paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".S8MRS_DBS_prevalence_data_ALL.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+
+##### Delete variables
+rm(S8_DBS_data, S8_WB_prevalence_FD, S8_DBS_data_agegrp, prev_data_agegrp_1, prev_data_agegrp_2, prev_data_agegrp_2_adjust100uL, S8MRS_prevalence_data_ALL)
+
+```
+
+# PART 30.3: Draw Ghana/UpperEast/Bongo maps
+```{r}
+PART=30
+
+library(sf)
+library(wesanderson)
+library(ggrepel)
+
+# Download shapefile for Ghana from website: https://gadm.org/download_country.html
+
+## Load the GADM shapefile
+ghana_gadm_sf <- st_read("input_files/gadm41_GHA_shp")
+
+## Check the names of the regions
+unique(ghana_gadm_sf$NAME_1)
+
+### GHANA MAP
+## To get only one centroid per region in Ghana
+## Group by region name and combine geometries
+ghana_regions_combined <- ghana_gadm_sf %>%
+  group_by(NAME_1) %>%           # Group by region name (adjust column name if different)
+  summarize(geometry = st_union(geometry))  # Combine geometries within each region
+
+## Calculate centroids for each combined region geometry
+ghana_centroids <- st_centroid(ghana_regions_combined)
+
+## Extract the coordinates of the centroids
+ghana_centroid_coords <- st_coordinates(ghana_centroids)
+
+## Create a data frame with region names and centroid coordinates
+ghana_centroid_data <- data.frame(
+  region = ghana_regions_combined$NAME_1,  # Adjust the column name if needed
+  lon = ghana_centroid_coords[, 1],
+  lat = ghana_centroid_coords[, 2]
+)
+
+### BONGO MAP
+## To get centroid for Bongo
+district_centroids <- st_centroid(ghana_gadm_sf) # Calculate centroids for each district
+bongo_centroids_coords <- st_coordinates(district_centroids) # Extract the coordinates of the centroids
+
+## Create a data frame with district names and centroid coordinates
+bongo_centroid_data <- data.frame(
+  district = ghana_gadm_sf$NAME_2,  # Adjust this to match the district column name in your data
+  region = ghana_gadm_sf$NAME_1,    # Region name, if needed
+  lon = bongo_centroids_coords[, 1],
+  lat = bongo_centroids_coords[, 2]
+)
+
+### READ IN DATA
+MAPs_data_subset <- readRDS(paste0("Z06.IMPACT_MAPS.out_RDS/0", PART, ".MAPs_prevalence_data.rds")) %>%
+  select(AgeGrp, Species, Country=`National Unit`, Region=Name, Prevalence=Value, MapType) 
+
+S8MRS_prevalence_data_ALL <- readRDS(paste0("Z06.IMPACT_MAPS.out_RDS/0", PART, ".S8MRS_DBS_prevalence_data_ALL.rds")) %>%
+  select(AgeGrp, Species, Country, District, Prevalence, MapType)
+
+### COMBINE DATA
+## Join MAPs data to world map
+MAPs_data_subset_merge_sf <- ghana_gadm_sf %>%
+  left_join(MAPs_data_subset, by=c("COUNTRY"="Country", "NAME_1"="Region"))
+
+## Join S8 DBS data to Bongo map & add other regions with prevalence=NA
+S8MRS_prevalence_data_ALL_merge_sf <- ghana_gadm_sf %>%
+  left_join(S8MRS_prevalence_data_ALL, by=c("COUNTRY"="Country", "NAME_2"="District")) %>%
+  filter(NAME_2 == "Bongo")
+
+for (sub in c("Survey DBS (2-10yr)", "Survey DBS (all ages)", "Survey DBS (all ages) - adjusted for deep sampling")) {
+  S8MRS_prevalence_data_ALL_merge_sf <- MAPs_data_subset_merge_sf %>%
+    filter(NAME_2 != "Bongo") %>%
+    filter(Species != "(Pm|Po)") %>%
+    mutate(MapType = sub) %>%
+    mutate(Prevalence = NA) %>%
+    rbind(S8MRS_prevalence_data_ALL_merge_sf, .)
+}
+
+## Merge data
+merged_data_ALL <- rbind(MAPs_data_subset_merge_sf, S8MRS_prevalence_data_ALL_merge_sf)
+
+## Set factors
+merged_data_ALL$MapType <- factor(merged_data_ALL$MapType, levels=c("Malaria Atlas (2-10yr)", "Survey DBS (2-10yr)", "Survey DBS (all ages)", "Survey DBS (all ages) - adjusted for deep sampling"))
+
+## Color scale limits
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+
+ghana_min <- 0 #merged_data_ALL$Prevalence %>% na.omit() %>% min()
+ghana_max <- merged_data_ALL$Prevalence %>% na.omit() %>% max()
+
+### GHANA MAP
+## Plot map - Ghana
+bongo_coords <- data.frame(district="Bongo", lat=10.9090167, lon=-0.8079772)
+
+map_ghana <- merged_data_ALL %>%
+  filter(MapType=="Malaria Atlas (2-10yr)" & Species=="Pf") %>%
+  ggplot(.) +
+  geom_sf(aes(fill=Prevalence), colour="white") +
+  geom_sf(aes(fill=Prevalence), colour="white") +
+  theme_pubr() +
+  geom_text(data=ghana_centroid_data, aes(x=lon, y=lat, label=region), size=3, color="black") +  # Add labels
+  geom_label_repel(data=bongo_coords, aes(x=lon, y=lat, label=district), label.padding=0.35, point.padding=0.1, size=3, nudge_y=0.5, nudge_x=0.1) +
+  ggtitle("Malaria Atlas Project:\nP. falciparum Infection Prevalence by region in Ghana (2-10yr)") +
+  scale_fill_gradientn(name="Prevalence", colours=pal, limits=c(ghana_min, ghana_max)) + 
+  theme_pubr() +
+  theme(legend.position="right",
+        legend.title=element_text(size=11),
+        axis.text=element_text(size=11),
+        plot.title = element_text(size=12),
+        strip.text = element_text(size=12))
+
+### UPPER EAST GHANA MAP
+## Plot map - Upper East
+map_upper_east_blank <- merged_data_ALL %>%
+  filter(MapType=="Malaria Atlas (2-10yr)" & NAME_1=="Upper East" & Species=="Pf") %>%
+  mutate(Prevalence=ifelse(NAME_2=="Bongo", Prevalence, NA)) %>%
+  ggplot(.) +
+  geom_sf(aes(fill=Prevalence), colour="grey20") +
+  geom_text(data=filter(ghana_centroid_data, region=="Upper East"), aes(x=lon, y=lat, label=region), size=10, color="black") +  # Add labels
+  geom_label_repel(data=bongo_coords, aes(x=lon, y=lat, label=district), label.padding=0.5, point.padding=0.1, size=8, nudge_y=0.2) +
+  scale_fill_gradientn(name="Prevalence", colours="grey70", na.value="white") + 
+  theme_pubr() +
+  theme(legend.position="none",
+        axis.title=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(),
+        axis.line=element_blank(),
+        strip.text = element_text(size=12))
+
+map_bongo_blank <- merged_data_ALL %>%
+  filter(MapType=="Malaria Atlas (2-10yr)" & NAME_2=="Bongo", Species=="Pm") %>%
+  ggplot(.) +
+  geom_sf(aes(fill=Prevalence), colour="grey20") +
+  geom_text(data=filter(bongo_centroid_data, district=="Bongo"), aes(x=lon, y=lat, label=district), size=5, color="black") +  # Add labels
+  scale_fill_gradientn(name="Prevalence", colours=pal, limits=c(ghana_min, ghana_max), na.value="white") + 
+  theme_pubr() +
+  theme(legend.position="none",
+        axis.title=element_blank(),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(),
+        axis.line=element_blank(),
+        strip.text = element_text(size=12))
+
+### BONGO MAP
+# Plot map - Bongo
+map_bongo <- merged_data_ALL %>%
+  filter(NAME_2=="Bongo") %>%
+  mutate(Species = gsub("Pf", "P. falciparum", Species),
+         Species = gsub("Pm", "P. malariae", Species),
+         Species = gsub("Po", "P. ovale spp.", Species)) %>%
+  ggplot(.) +
+  geom_sf(aes(fill=Prevalence), colour="grey30") +
+  geom_text(data=filter(bongo_centroid_data, district=="Bongo"), aes(x=lon, y=lat, label=district), size=3, color="black") +  # Add labels
+  scale_fill_gradientn(name="Prevalence", colours=pal, limits=c(ghana_min, ghana_max), na.value="white") + 
+  theme_pubr() +
+  theme(legend.position="none",
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        axis.ticks=element_blank()) +
+  facet_grid(MapType~Species, switch="y",
+             labeller=label_wrap_gen(width=16, multi_line=TRUE)) +
+  theme(strip.text.y.left=element_text(angle=0),
+        strip.text = element_text(size=12))
+
+# Plot map - Bongo with bordering regions
+merged_data_ALL_Bongo <- merged_data_ALL %>%
+  mutate(Species = gsub("Pf", "P. falciparum", Species),
+         Species = gsub("Pm", "P. malariae", Species),
+         Species = gsub("Po", "P. ovale spp.", Species)) %>%
+  mutate(Prevalence=ifelse(NAME_2=="Bongo", Prevalence, NA))
+
+map_bongo_borders <- merged_data_ALL_Bongo %>%
+  ggplot(.) +
+  geom_sf(aes(fill=Prevalence), colour="grey50") +
+  coord_sf(xlim=c(-1, -0.6), ylim=c(10.8, 11.01)) +
+  geom_text(data=filter(merged_data_ALL_Bongo, NAME_2=="Bongo"), aes(x=-0.7937153, y=10.92294, label=format(Prevalence, digits=3))) + #data=filter(bongo_centroid_data, district=="Bongo"), aes(x=lon, y=lat, label=district), size=3, color="black") +  # Add labels
+  scale_fill_gradientn(name="Prevalence", colours=pal, limits=c(ghana_min, ghana_max), na.value="white") + 
+  theme_bw() +
+  ggtitle("Plasmodium spp. Infection Prevalence (%) in Bongo, Ghana") +
+  theme(legend.position="none",
+        panel.grid=element_blank(),
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        axis.ticks=element_blank(),
+        plot.title = element_text(size=12)) +
+  facet_grid(MapType~Species, switch="y",
+             labeller=label_wrap_gen(width=16, multi_line=TRUE)) +
+  theme(strip.text.y.left=element_text(angle=0),
+        strip.text = element_text(size=12))
+
+##### COMBINE FIGURES
+## Combine Ghana and Bongo maps
+ghana_bongo_combine_maps <- ggarrange(map_ghana, map_bongo_borders, nrow=1, widths=c(2,2.6))
+  
+##### Save output
+## Save files in TIFF format
+# ggsave(paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".map_uppereast_blank.PLOT.tiff"),
+#        map_upper_east_blank,
+#        device="tiff",
+#        dpi=300,
+#        width=8, height=4)
+# ggsave(paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".map_bongo_blank.PLOT.tiff"),
+#        map_bongo_blank,
+#        device="tiff",
+#        dpi=300,
+#        width=4, height=2)
+ggsave(paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".map_COMPOSITE.PLOT.tiff"),
+       ghana_bongo_combine_maps,
+       device="tiff",
+       dpi=300,
+       width=11, height=6)
+
+##### Delete variables
+rm(ghana_gadm_sf, ghana_regions_combined, ghana_centroids, ghana_centroid_data, district_centroids, bongo_centroid_data, MAPs_data_subset, S8MRS_prevalence_data_ALL, MAPs_data_subset_merge_sf, S8MRS_prevalence_data_ALL_merge_sf, S8MRS_prevalence_data_ALL_merge_sf, merged_data_ALL, pal, ghana_min, ghana_max, bongo_coords, map_ghana, map_bongo, merged_data_ALL_Bongo, map_bongo_borders, map_upper_east_blank, map_bongo_blank, ghana_bongo_combine_maps)
+```
+
+# ***** PREVALENCE SCALE UP by VOLUME & REGION
+# PART 31: Calculating prevalence and fold difference by different age groups (according to City Population breakdown)
+```{r}
+PART=31
+PART_prev=PART-30
+PART_prev2=PART-21
+
+final_agedist_list <- c("All ages (6+ Years)", "0-5 Years", "6-9 Years", "10-19 Years", "20-39 Years", "40+ Years")
+
+## From City Population website based on GSS census
+# Bongo ("0-9 Years" size = 30416, divide 60-40 for 0-5 Years - 18250 and 6-9 Years - 12166)
+Citypop_Bongo_agedist <- data.frame(cat=c("All (0+ Years)", "0-9 Years", "0-5 Years", "6-9 Years", "10-19 Years", "20-39 Years", "40+ Years"),
+                                    bongo_popsize=c(120254, 30416, round(30416/10*6, 0), round(30416/10*4, 0), 28494, 35135, 26209))
+
+# Upper East Ghana ("0-9 Years" size = 334250, divide 60-40 for 0-5 Years - 200550 and 6-9 Years - 133700)
+Citypop_UpperEast_agedist <- data.frame(cat=c("All (0+ Years)", "0-9 Years", "0-5 Years", "6-9 Years", "10-19 Years", "20-39 Years", "40+ Years"),
+                                        UEghana_popsize=c(1301226, 334250, round(334250/10*6, 0), round(334250/10*4, 0), 304105, 378958, 283913))
+
+for (plotpid in setpid) {
+  
+  # Read files
+  S8_DBS_data <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".S8MRS_DBS_MOI.", file_prefix, ".rds")) # used this to have a clear estimate of asymptomatic isolates in S8 Bongo
+  S8_WB_data <- readRDS(paste0("Z02.FIELD.out_RDS/0", PART_prev2, ".id", plotpid, ".FIELD.file_isolates_SpeciesData.rds"))
+  
+  ## Make age group labels
+  S8_DBS_data <- S8_DBS_data %>%
+    filter(Survey == 8) %>%
+    mutate(AgeGrp_new = case_when(age >= 0 & age <= 5 ~ "0-5 Years",
+                                  age >= 6 & age <= 9 ~ "6-9 Years",
+                                  age >= 10 & age <= 19 ~ "10-19 Years",
+                                  age >= 20 & age <= 39 ~ "20-39 Years",
+                                  age >= 40 ~ "40+ Years"))
+
+
+  ## Make new age groups (S8 WB - prevalence)
+  S8_WB_data <- S8_WB_data %>%
+    mutate(AgeGrp_new = case_when(age >= 0 & age <= 5 ~ "0-5 Years",
+                                  age >= 6 & age <= 9 ~ "6-9 Years",
+                                  age >= 10 & age <= 19 ~ "10-19 Years",
+                                  age >= 20 & age <= 39 ~ "20-39 Years",
+                                  age >= 40 ~ "40+ Years"))
+  
+  ## RE-CALCULATE new prevalence and fold differences (THIS WB STUDY)
+  # Not by age
+  S8_WB_data_prevalence <- S8_WB_data %>%
+    filter(AgeGrp_new != "0-5 Years") %>%
+    group_by(Source, Species, value) %>%
+    summarise(n=n()) %>%
+    ungroup(value) %>%
+    mutate(prop=n/sum(n)*100) %>%
+    filter(!is.na(value)) %>%
+    pivot_wider(-c(value, n), names_from=Source, values_from=prop) %>%
+    replace(is.na(.), 0) %>%
+    mutate(prevalence_fold_diff=ifelse(DBS==0, (`100uL`+1)/(DBS+1), `100uL`/DBS)) %>%
+    mutate(adjusted_fold_diff=ifelse(DBS==0, "Yes", "No")) %>%
+    mutate(AgeGrp_new="All ages (6+ Years)")
+  
+  # By age
+  S8_WB_data_prevalence <- S8_WB_data %>%
+    filter(AgeGrp_new != "0-5 Years") %>%
+    group_by(Source, Species, AgeGrp_new, value) %>%
+    summarise(n=n()) %>%
+    ungroup(value) %>%
+    mutate(prop=n/sum(n)*100) %>%
+    filter(!is.na(value)) %>%
+    pivot_wider(-c(value, n), names_from=Source, values_from=prop) %>%
+    replace(is.na(.), 0) %>%
+    mutate(prevalence_fold_diff=ifelse(DBS==0, (`100uL`+1)/(DBS+1), `100uL`/DBS)) %>%
+    mutate(adjusted_fold_diff=ifelse(DBS==0, "Yes", "No")) %>%
+    rbind(S8_WB_data_prevalence, .)
+  
+  ## RE-CALCULATE new prevalence and fold differences (S8 DBS STUDY)
+  # Not by age
+  S8_DBS_data_prevalence <- S8_DBS_data %>%
+    filter(AgeGrp_new != "0-5 Years") %>%
+    dplyr::select(study_id, PfPCR, PmPCR, PoPCR, PvPCR) %>%
+    pivot_longer(-c(study_id), names_to="Species") %>%
+    mutate(Species=gsub("PCR", "", Species)) %>%
+    mutate(value=gsub("(Pf|Pm|Po|Pv) ", "", value)) %>%
+    group_by(Species, value) %>%
+    summarise(Survey_DBS_n=n()) %>%
+    ungroup(value) %>%
+    mutate(Survey_DBS_Prevalence=Survey_DBS_n/sum(Survey_DBS_n)*100) %>%
+    filter(value == "PCR +") %>%
+    mutate(AgeGrp_new="All ages (6+ Years)")
+  
+  # By age
+  S8_DBS_data_prevalence <- S8_DBS_data %>%
+    filter(AgeGrp_new != "0-5 Years") %>%
+    dplyr::select(study_id, AgeGrp_new, PfPCR, PmPCR, PoPCR, PvPCR) %>%
+    pivot_longer(-c(study_id, AgeGrp_new), names_to="Species") %>%
+    mutate(Species=gsub("PCR", "", Species)) %>%
+    mutate(value=gsub("(Pf|Pm|Po|Pv) ", "", value)) %>%
+    group_by(AgeGrp_new, Species, value) %>%
+    summarise(Survey_DBS_n=n()) %>%
+    ungroup(value) %>%
+    mutate(Survey_DBS_Prevalence=Survey_DBS_n/sum(Survey_DBS_n)*100) %>%
+    filter(value == "PCR +") %>%
+    rbind(S8_DBS_data_prevalence, .)
+    
+  ## LARGE TABLE
+  large_table <- left_join(S8_WB_data_prevalence, S8_DBS_data_prevalence, by=c("Species", "AgeGrp_new")) %>%
+    mutate(Survey_DBS_n_100uL = round(prevalence_fold_diff * Survey_DBS_n, 0)) %>%
+    mutate(Survey_DBS_Prevalence_100uL = prevalence_fold_diff * Survey_DBS_Prevalence) %>%
+    left_join(., Citypop_Bongo_agedist, by=c("AgeGrp_new"="cat")) %>%
+    mutate(Citypop_Bongo_DBS = round(Survey_DBS_Prevalence/100 * bongo_popsize, 0),
+           Citypop_Bongo_100uL = round(Survey_DBS_Prevalence_100uL/100 * bongo_popsize, 0)) %>%
+    left_join(., Citypop_UpperEast_agedist, by=c("AgeGrp_new"="cat")) %>%
+    mutate(Citypop_UEghana_DBS = round(Survey_DBS_Prevalence/100 * UEghana_popsize, 0),
+           Citypop_UEghana_100uL = round(Survey_DBS_Prevalence_100uL/100 * UEghana_popsize, 0)) %>%
+    select(Species, AgeGrp_new, DBS, `100uL`, prevalence_fold_diff,
+           Survey_DBS_n, Survey_DBS_n_100uL,
+           Survey_DBS_Prevalence, Survey_DBS_Prevalence_100uL,
+           Citypop_Bongo_DBS, Citypop_Bongo_100uL,
+           Citypop_UEghana_DBS, Citypop_UEghana_100uL) %>%
+    mutate(AgeGrp_new=factor(AgeGrp_new, levels= final_agedist_list)) %>%
+    arrange(Species, AgeGrp_new)
+
+  ##### Save output
+  ## Save files in TXT format
+  write.table(large_table, file=paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".scale_up_population.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(S8_WB_data, S8_DBS_data, S8_WB_data_prevalence, S8_DBS_data_prevalence, large_table)
+}
+```
+
+# ***** DBS CORRECTION & SCALE UP by VOLUME & REGION
+# PART 32.1: Fit model between FD-MOI and Pf-MOIs (6+ years)
+```{r}
+library(mgcv)
+library(splines)
+
+PART=32
+PART_prev=PART-16
+PART_prev2=PART-20
+
+# RMSE and MAE functions
+rmse <- function(actual, predicted) {
+  sqrt(mean((actual - predicted)^2))
+}
+
+mae <- function(actual, predicted) {
+  mean(abs(actual - predicted))
+}
+
+for (plotpid in setpid) {
+  
+  ## Read files
+  isolates_diff_FC_nonzero <- readRDS(paste0("Z02.FIELD.out_RDS/", PART_prev, ".id", plotpid, ".FIELD.FC_dist.rds")) %>%
+    filter(label=="1uL & 100uL" & diff_metric == "Pf-MOI")
+
+  ## Initialise empty df
+  rmse_mae_output <- data.frame()
+      
+  ## Models
+  # Split train and test
+  for (prop in c(0.7, 0.8, 0.9)) {
+    N <- nrow(isolates_diff_FC_nonzero) 
+    N_samp <- prop * N
+    
+    # Iteration x 100
+    for (i in 1:100) {
+      # Random selection of rows
+      Z <- sample(N, N_samp) # train-test 90-10
+      training <- isolates_diff_FC_nonzero[Z,]
+      testing <- isolates_diff_FC_nonzero[-Z,]
+      
+      # For debugging
+      # assign(paste0("training_", i, "_", prop), training)
+      # assign(paste0("testing_", i, "_", prop), testing)
+      
+      # Max k values
+      k_max <- length(unique(training$volS_value))
+      
+      # GAM Model and predict
+      gam_model <- gam(formula = diff_value ~ s(volS_value, k=k_max), data=training, method="REML")
+      gam_pred_test <- predict(gam_model, newdata=testing)
+      
+      # LOESS Model and predict - PROBLEM with extrapolation
+      loess_model <- loess(diff_value ~ volS_value, data=training)
+      loess_pred_test <- predict(loess_model, newdata=testing)
+      
+      # Spline Model and predict
+      spline_model <- lm(diff_value ~ bs(volS_value, degree = 3), data = training)
+      spline_pred_test <- predict(spline_model, newdata=testing)
+      
+      # Model check (optional)
+      # par(mfrow = c(2, 2))
+      # gam.check(gam_model)
+        
+      # Calculate RMSE & MAE
+      gam_rmse <- rmse(testing$diff_value, gam_pred_test)
+      gam_mae <- mae(testing$diff_value, gam_pred_test)
+      
+      loess_rmse <- rmse(testing$diff_value, loess_pred_test)
+      loess_mae <- mae(testing$diff_value, loess_pred_test)
+      
+      spline_rmse <- rmse(testing$diff_value, spline_pred_test)
+      spline_mae <- mae(testing$diff_value, spline_pred_test)
+      
+      # Save in df
+      rmse_mae_output <- rbind(rmse_mae_output, cbind(Iteration=i, Sample_p=prop,
+                                                      RMSE_gam=gam_rmse, RMSE_loess=loess_rmse, RMSE_spline=spline_rmse,
+                                                      MAE_gam=gam_mae, MAE_loess=loess_mae, MAE_spline=spline_mae))
+      
+      rm(Z, training, testing, gam_model, gam_pred_test, loess_model, loess_pred_test, spline_model, spline_pred_test, gam_rmse, gam_mae, loess_rmse, loess_mae, spline_rmse, spline_mae)
+    }
+  }
+  ## Calculate mean RMSE and MAE
+  rmse_mae_output_mean <- rmse_mae_output %>% group_by(Sample_p) %>% summarise(across(starts_with("RMSE") | starts_with("MAE"), ~ mean(.x, na.rm = TRUE))) # GAM looks best
+  
+  ##### Save output
+  ## Save files in TXT format
+  write.table(rmse_mae_output_mean, file=paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".id", plotpid, ".models_RMSE_MAE_mean.txt"), quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ##### Delete variables
+  rm(isolates_diff_FC_nonzero, prop, N, N_samp, i, rmse_mae_output, rmse_mae_output_mean)
+}
+
+```
+
+# PART 32.2: DBS correction with GAM (6+ years)
+```{r}
+PART=32
+PART_prev=PART-16
+PART_prev2=PART-20
+
+## Function to calculate KL Divergence
+kl_divergence <- function(p, q) {
+  # Avoid division by zero by replacing 0 values with a small number
+  p <- ifelse(p == 0, 1e-10, p)
+  q <- ifelse(q == 0, 1e-10, q)
+  
+  # Calculate KL divergence
+  sum(p * log(p / q))
+}
+
+for (plotpid in setpid) {
+  
+  Bongo_6plusYears_total <- Citypop_Bongo_agedist[4:nrow(Citypop_Bongo_agedist),] %>%
+    summarise(sum(bongo_popsize)) %>% as.numeric()
+  
+  UEghana_6plusYears_total <- Citypop_UpperEast_agedist[4:nrow(Citypop_UpperEast_agedist),] %>%
+    summarise(sum(UEghana_popsize)) %>% as.numeric()
+  
+  ##### Read files
+  isolates_diff_FC_nonzero <- readRDS(paste0("Z02.FIELD.out_RDS/", PART_prev, ".id", plotpid, ".FIELD.FC_dist.rds")) %>%
+    filter(label=="1uL & 100uL" & diff_metric == "Pf-MOI")
+  
+  S8_DBS_data <- read.csv("input_files/Ghana_Survey_Merged_Epi_MOI_S1_S10_131223.csv", header=TRUE) %>%
+    filter(Survey == 8) %>%
+    filter(age >= 6)
+  
+  ## Count total number of isolates in Survey 8 aged (6+ Years)
+  S8_DBS_data_total <- S8_DBS_data %>% nrow()
+  
+  ## Keep only those with MOI
+  S8_DBS_data <- S8_DBS_data %>%
+    filter(!is.na(MOI)) %>%
+    mutate(volS_value=MOI)
+  
+  ## Calculate S8 prevalence (6+ Years)
+  S8_DBS_data_prevalence <- formatC(nrow(S8_DBS_data)/S8_DBS_data_total, digits=4) %>% as.numeric()
+  
+  ## GAM Model and predict
+  # Max k values
+  k_max <- length(unique(isolates_diff_FC_nonzero$volS_value))
+  
+  gam_model_MAIN <- gam(formula = diff_value ~ s(volS_value, k=k_max), data=isolates_diff_FC_nonzero, method="REML")
+  gam_pred_MAIN_WB <- isolates_diff_FC_nonzero %>% mutate(gam_pred=predict(gam_model_MAIN, newdata=isolates_diff_FC_nonzero))
+  gam_pred_MAIN_DBS <- predict(gam_model_MAIN, newdata=S8_DBS_data)
+  
+  ## Plot scatter with curve models (loess or GAM) - 1uL vs 100uL only
+  plot_scatter_FC_MOI_1vs100_model <- isolates_diff_FC_nonzero %>%
+    filter(diff_metric == "Pf-MOI" & volS_name=="1uL" & volB_name=="100uL") %>%
+    group_by(volS_name, volB_name, volS_value, diff_value, label_long) %>%
+    summarise(pointsize=n()) %>%
+    ungroup() %>%
+    ggplot(., aes(x=volS_value, y=diff_value)) +
+    geom_hline(yintercept=2^0, linetype="dashed", col="red", size=0.5) +
+    geom_point(aes(fill=volS_name, size=pointsize), color="black", shape=21) +
+    geom_line(data=gam_pred_MAIN_WB, aes(y=gam_pred), color="dark green", size=0.7) +
+    theme_bw() +
+    scale_x_continuous(name=expression(Pf-MOI[S]), breaks=scales::pretty_breaks(10),
+                       limits=c(0, NA)) +
+    scale_y_continuous(name="Fold Difference",
+                       trans = scales::log2_trans(),
+                       breaks = scales::trans_breaks("log2", function(x) 2^x),
+                       labels = scales::trans_format("log2", scales::math_format(2^.x))) +
+    scale_fill_jco(name=expression(Vol[S])) +
+    scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
+    guides(alpha="none") +
+    scale_size(name="Number of\nisolates") +
+    theme(legend.position="right",
+          legend.text=element_text(size=12),
+          panel.grid=element_blank(),
+          axis.text=element_text(size=12),
+          axis.title=element_text(size=14),
+          axis.text.x=element_text(angle=90, vjust=0.5)) +
+    facet_wrap(.~label_long, nrow=2) +
+    theme(strip.text=element_text(size=12))
+  
+  ## Combine with S8 data frame and calculate volB_value (adjusted MOI)
+  S8_DBS_data <- S8_DBS_data %>% mutate(diff_value=gam_pred_MAIN_DBS) %>% mutate(volB_value=volS_value*diff_value)
+  
+  ## Calculate mean MOIs
+  calc_census_popsize <- function(mean, total_pop) {
+    round(mean * S8_DBS_data_prevalence * total_pop, 0)
+  }
+
+  mean_data <- data.frame(data_type=c("WB", "DBS"),
+                          meanMOI=c(mean(isolates_diff_FC_nonzero$volS_value), mean(S8_DBS_data$volS_value)),
+                          meanMOI_adj=c(mean(isolates_diff_FC_nonzero$volB_value), mean(S8_DBS_data$volB_value))) %>%
+    mutate(S8_census_popsize=calc_census_popsize(meanMOI, S8_DBS_data_total),
+           S8_census_popsize_adj=calc_census_popsize(meanMOI_adj, S8_DBS_data_total),
+           bongo_census_popsize=calc_census_popsize(meanMOI, Bongo_6plusYears_total),
+           bongo_census_popsize_adj=calc_census_popsize(meanMOI_adj, Bongo_6plusYears_total),
+           UEghana_census_popsize=calc_census_popsize(meanMOI, UEghana_6plusYears_total),
+           UEghana_census_popsize_adj=calc_census_popsize(meanMOI_adj, UEghana_6plusYears_total))
+  
+  ## Plot distributions of MOI and diff_value
+  data_combined <- isolates_diff_FC_nonzero %>% mutate(data_type="WB") %>% select(data_type, volS_value, diff_value, volB_value)
+  data_combined <- S8_DBS_data %>% mutate(data_type="DBS") %>% select(data_type, volS_value, diff_value, volB_value) %>%
+    rbind(data_combined, .)
+  
+  plot_dist <- data_combined %>%
+    select(data_type, `Pf-MOI`=volS_value, `FD_Pf-MOI`=diff_value, `Pf-MOI_adj`=volB_value) %>%
+    pivot_longer(-c(data_type), names_to="metric") %>%
+    mutate(metric=factor(metric, levels=c("Pf-MOI", "FD_Pf-MOI", "Pf-MOI_adj"))) %>%
+    ggplot(., aes(x=as.numeric(value), color=data_type)) +
+    geom_density() +
+    theme_bw() +
+    scale_x_continuous(name="Pf-MOI", breaks=scales::pretty_breaks(10)) +
+    scale_y_continuous(breaks=scales::pretty_breaks(10)) +
+    facet_grid(.~metric)
+    
+  ## KS test and KL divergence
+  ks_result <- ks.test(isolates_diff_FC_nonzero$volB_value, S8_DBS_data$volB_value)
+  
+  ## KL Divergence: Kullback-Leibler (KL) Divergence measures how one probability distribution diverges from a second, expected probability distribution. KL divergence requires the distributions to be probability distributions (i.e., normalized to sum to 1).
+  # Create probability distributions using histograms
+  # Extend breaks to cover both training and test data
+  values <- c(isolates_diff_FC_nonzero$volB_value, S8_DBS_data$volB_value)
+  range_combined <- range(values)
+
+  # Create breaks that span the entire range of both datasets
+  breaks_extended <- seq(range_combined[1], range_combined[2], length.out=length(unique(values)))
+
+  hist_train <- hist(isolates_diff_FC_nonzero$volB_value, breaks = breaks_extended, plot = FALSE)
+  hist_pred <- hist(S8_DBS_data$volB_value, breaks = breaks_extended, plot = FALSE) # Same breaks for consistency
+  
+  # Normalize counts to make them probabilities
+  p_train <- hist_train$density
+  p_pred  <- hist_pred$density
+  
+  # Calculate KL Divergence
+  KL_result <- kl_divergence(p_train, p_pred)
+  
+  ##### Save output
+  ## Save files in RDS format
+  saveRDS(plot_scatter_FC_MOI_1vs100_model, paste0("Z06.IMPACT_MAPS.out_RDS/0", PART, ".id", plotpid, ".FIELD.FC_acrossMOImodel.1vs100.SCATTER.rds"))
+  
+  ## Save files in TXT format
+  write.table(mean_data, file=paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".id", plotpid, ".meanMOI_censuspopsize_adjusted.txt"),
+              quote=FALSE, row.names=FALSE, sep="\t")
+  
+  ## Save files in TIFF format
+  # ggsave(paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".id", plotpid, ".adjusted_MOI_distributions.tiff"),
+  #        plot_dist,
+  #        device="tiff", dpi=300,
+  #        width=8, height=3)
+  
+  ggsave(paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.FC_acrossMOImodel.1vs100.SCATTER.tiff"),
+         plot_scatter_FC_MOI_1vs100_model,
+         device="tiff", dpi=300,
+         width=5, height=4)
+  
+  ##### Delete variables
+  rm(Bongo_6plusYears_total, UEghana_6plusYears_total, isolates_diff_FC_nonzero, S8_DBS_data, S8_DBS_data_total, S8_DBS_data_prevalence, k_max, gam_model_MAIN, gam_pred_MAIN_WB, gam_pred_MAIN_DBS, plot_scatter_FC_MOI_1vs100_model, mean_data, data_combined, plot_dist, ks_result, values, range_combined, breaks_extended, hist_train, hist_pred, p_train, p_pred, KL_result)
+}
+```
+
+# ***** COMPOSITE FIGURES
+# PART 40 [FIELD, POPULATION]: COMBINE PLOTS
+```{r}
+PART=40
+
+for (plotpid in setpid) {
+  
+  coeff <- 50
+  
+  ## PLOTS
+  plot1 <- readRDS(paste0("Z02.FIELD.out_RDS/0", PART-30, ".id", plotpid, ".FIELD.species_PfMOI.TILE.rds"))
+  plot2 <- readRDS(paste0("Z02.FIELD.out_RDS/0", PART-27, ".id", plotpid, ".FIELD.MOIonly.BOX.rds"))
+  plot3 <- readRDS(paste0("Z06.IMPACT_MAPS.out_RDS/0", PART-8, ".id", plotpid, ".FIELD.FC_acrossMOImodel.1vs100.SCATTER.rds"))
+  plot4 <- readRDS(paste0("Z04.POPULATION.out_RDS/0", PART-16, ".id", plotpid, ".FIELD_POP.numisolates_richness.BAR.rds"))
+  plot5 <- readRDS(paste0("Z04.POPULATION.out_RDS/0", PART-15, ".id", plotpid, ".FIELD_POP.PTS_allObservations.VIOLIN.PLOT.rds"))
+  
+  ## PLOT LAYOUT
+  combine1 <- ggarrange(plot2, NA, plot3, ncol=1, labels=c("B", "", "C"), heights=c(1, 0.02, 0.8))
+  combine2 <- ggarrange(plot4, NA, plot5, nrow=1, labels=c("D", "", "E"), widths=c(0.9, 0.02, 1))
+  combine1_3 <- ggarrange(plot1, NA, combine1, nrow=1, widths=c(0.9, 0.02, 1), labels=c("A", "", ""))
+  plot_field_population <- ggarrange(combine1_3, NA, combine2, ncol=1, heights=c(1, 0.01, 0.5))
+  
+  ggsave(paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".id", plotpid, ".FIELD_POP.COMPOSITE.tiff"),
+         plot_field_population,
+         device="tiff", dpi=300,
+         width=10, height=12)
+  
+  ##### Delete variables
+  rm(plot1, plot2, plot3, plot4, plot5, combine1, combine2, plot_field_population, PART)
+}
+```
+
+# PART 40 [REPEAT]: COMBINE PLOTS
+```{r}
+PART=40
+
+for (plotpid in setpid) {
+  plot1 <- readRDS(paste0("Z03.REPEATS.out_RDS/0", PART-21, ".id", plotpid, ".REPEATS.MOI.TILE.PLOT.rds"))
+  plot2 <- readRDS(paste0("Z03.REPEATS.out_RDS/0", PART-18, ".id", plotpid, ".REPEATS.PTS_dist.BOX.PLOT.rds"))
+  plot3 <- readRDS(paste0("Z03.REPEATS.out_RDS/0", PART-19, ".id", plotpid, ".REPEATS.MOI.SCATTER.PLOT.rds"))
+  plot4 <- readRDS(paste0("Z03.REPEATS.out_RDS/0", PART-20, ".id", plotpid, ".REPEATS.pairedWilcoxTest_repsize_MOI.BOX.PLOT.rds"))
+ 
+  plot_repeats <- ggarrange(ggarrange(plot1, NULL, plot2, nrow=1,
+                                      widths=c(1.8, 0.05, 1), labels=c("A", "", "B")),
+                            plot3, plot4, nrow=3, heights=c(1.6, 1, 1),
+                            labels=c("", "C", "D"))
+  
+  ggsave(paste0("Z06.IMPACT_MAPS.out_RESULTS/0", PART, ".id", plotpid, ".REPEATS.COMPOSITE.tiff"),
+         plot_repeats,
+         device="tiff", dpi=300,
+         width=12, height=14)
+  
+  rm(plot1, plot2, plot3, plot4, plot_repeats, PART)
+}
+```
+
+
+# Session information of this code
+```{r}
+sessionInfo()
+```
+
+

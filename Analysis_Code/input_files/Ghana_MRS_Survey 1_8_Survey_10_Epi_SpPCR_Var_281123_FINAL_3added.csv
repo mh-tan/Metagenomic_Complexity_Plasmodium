@@ -1,0 +1,4 @@
+"Survey","MRS","study_id","LabSampleID","SeqID","NumberSeq","LabSeq","catchmentarea_ML","ParaGrp_SLIDE","rdt","PfPCR","PmPCR","PoPCR","PvPCR","ParaGrp_PCR","village_ML","section_ML","cpd_id_ML","AgeGrp","age","sex_ML","occup","temp","ParasiteuL","AnemiaGRP","hgb","sleepnet","mal_t"
+8,"MRS",2442,NA,NA,NA,NA,"Vea/Gowrie","Para -",NA,NA,NA,NA,NA,NA,"VEA","ZANGONGO","VZA052","6-10 Years",6,"MALE","Student/pupil","36.2",0,"Moderate",9.8,"Yes",NA
+8,"MRS",2473,NA,NA,NA,NA,"Vea/Gowrie","Para +",NA,"Pf PCR +","Pm PCR +","Po PCR -","Pv PCR -","Pf PCR +/Pm PCR +","VEA","TANGAPORE","VTP087","6-10 Years",7,"MALE","Student/pupil","36.2",1720,"Non-Anemic",14.2,"Yes","Yes"
+8,"MRS",2530,NA,NA,NA,NA,"Vea/Gowrie","Para +",NA,"Pf PCR +","Pm PCR -","Po PCR +","Pv PCR -","Pf PCR +/Po PCR +","GOWRIE","KASINGO","GKA004","6-10 Years",7,"FEMALE","Student/pupil","36.4",7080,"Non-Anemic",11.9,"Yes","Yes"
