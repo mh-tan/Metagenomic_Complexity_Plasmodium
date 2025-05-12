@@ -121,8 +121,8 @@ GSmatrixToTable <- function(x){
 
 # ENV: UNZIP FILES
 ```{bash}
-gunzip -1 input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_centroids.fasta.gz
-gunzip -1 input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_otuTable_binary.txt.gz
+gunzip -c1 input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_centroids.fasta.gz > input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_centroids.fasta
+gunzip -c1 input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_otuTable_binary.txt.gz > input_files/DBS_PilotS1to8_WB_S8MRS.id96.DBLaTags_cleaned_renamed_otuTable_binary.txt
 unzip input_files/gadm41_GHA_shp.zip -d input_files
 ```
 
@@ -144,30 +144,27 @@ for (plotpid in setpid) {
   ori_isolates_file <- read.table(paste0("input_files/isolateInformation_", plotpid, ".txt"), header=FALSE, sep="\t", check.names=FALSE)
   
   ## Survey 8 demography & DBS-species data
-  ori_demography_file <- read.csv("input_files/Ghana_MRS_Survey 1_8_Survey_10_Epi_SpPCR_Var_281123_FINAL.csv", header=TRUE, check.names=FALSE) %>%
-    filter(Survey == 8)
-  ## Survey 8 demography & DBS-species data
-  ori_demography_file <- rbind(ori_demography_file, read.csv("input_files/Ghana_MRS_Survey 1_8_Survey_10_Epi_SpPCR_Var_281123_FINAL_3added.csv", header=TRUE, check.names=FALSE)) %>%
-    filter(Survey == 8)
+  ori_S8_demography_file <- read.table("input_files/Ghana_MRS_Survey8_Epi_SpPCR_Var_281123_FINAL.txt", header=TRUE, sep="\t", check.names=FALSE)
   
   ## Survey 8 DBS-MOI data - to get correct isolates
-  ori_S8_DBS_MOI_file <- read.csv("input_files/Ghana_Survey_Merged_Epi_MOI_S1_S10_131223.csv", header=TRUE) %>% 
-    filter(Survey == 8)
+  ori_S8_DBS_MOI_file <- read.csv("input_files/Ghana_MRS_Survey8_Epi_MOI_131223.txt", header=TRUE, sep="\t", check.names=FALSE)
   
   ## S8 WB-species data
-  ori_species_file <- read.table(paste0("input_files/S8MRS_DBS_speciesPCR.txt"), header=TRUE, sep="\t", check.names=FALSE) %>%
+  ori_species_file <- read.table(paste0("input_files/Ghana_MRS_Survey8_DBS_speciesPCR.txt"), header=TRUE, sep="\t", check.names=FALSE) %>%
     select(-c(starts_with("DBS_")))
   
   ## S8 WB-species MOI data
-  ori_Pm_MOI_file <- read.csv(paste0("input_files/S8WB_Raw_Pm_MOI.csv"), header=TRUE)
-  ori_Poc_MOI_file <- read.csv(paste0("input_files/S8WB_Raw_Poc_MOI.csv"), header=TRUE)
-  ori_Pow_MOI_file <- read.csv(paste0("input_files/S8WB_Raw_Pow_MOI.csv"), header=TRUE)
+  ori_Pm_MOI_file <- read.csv(paste0("input_files/Ghana_MRS_Survey8_WB_Pm_MOI.csv"), header=TRUE)
+  ori_Poc_MOI_file <- read.csv(paste0("input_files/Ghana_MRS_Survey8_WB_Poc_MOI.csv"), header=TRUE)
+  ori_Pow_MOI_file <- read.csv(paste0("input_files/Ghana_MRS_Survey8_WB_Pow_MOI.csv"), header=TRUE)
   
   ## S8 WB-plasma-hrp2 data
-  ori_hrp2_file <- read.table(paste0("input_files/S8MRS_ELISA_HRP2.txt"), header=TRUE, sep="\t", check.names=FALSE)
+  ori_hrp2_file <- read.table(paste0("input_files/Ghana_MRS_Survey8_ELISA_HRP2.txt"), header=TRUE, sep="\t", check.names=FALSE)
   
   ## GADM Map data
   ori_MAPs_subnational_file <- read.csv("input_files/MAP_Subnational_Unit-data.csv", header=TRUE, check.names=FALSE, comment.char="")
+  ori_MAPs_bongo_file <- read.csv("input_files/Pixel-level-data_BongoGhana.csv",
+                                  header=TRUE, check.names=FALSE, comment.char="")
   
   ##### Save output
   ## Save files in RDS format
@@ -176,7 +173,7 @@ for (plotpid in setpid) {
   saveRDS(ori_isolates_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".isolates.", file_prefix, ".rds"))
   saveRDS(ori_fasta_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".DBS_PilotS1to8_WB_S8MRS_centroids.", file_prefix, ".rds"))
   
-  saveRDS(ori_demography_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_DBS_demography.", file_prefix, ".rds"))
+  saveRDS(ori_S8_demography_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_DBS_demography.", file_prefix, ".rds"))
   saveRDS(ori_hrp2_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_PLASMA_hrp2.", file_prefix, ".rds"))
   
   saveRDS(ori_S8_DBS_MOI_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_DBS_MOI.", file_prefix, ".rds"))
@@ -188,9 +185,10 @@ for (plotpid in setpid) {
   saveRDS(ori_Pow_MOI_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".S8MRS_WB_Pow_MOI.", file_prefix, ".rds"))
   
   saveRDS(ori_MAPs_subnational_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".GADM_map_data.", file_prefix, ".rds"))
+  saveRDS(ori_MAPs_bongo_file, paste0("Z01.MAIN.out_RDS/0", PART, ".id", plotpid, ".MAPs_Bongo_data.", file_prefix, ".rds"))
     
   ##### Delete variables
-  rm(ori_otutable_file, ori_domain_file, ori_isolates_file, ori_fasta_file, ori_demography_file, ori_hrp2_file, ori_S8_DBS_MOI_file, ori_species_file, ori_Pm_MOI_file, ori_Poc_MOI_file, ori_Pow_MOI_file, ori_MAPs_subnational_file, PART)
+  rm(ori_otutable_file, ori_domain_file, ori_isolates_file, ori_fasta_file, ori_S8_demography_file, ori_hrp2_file, ori_S8_DBS_MOI_file, ori_species_file, ori_Pm_MOI_file, ori_Poc_MOI_file, ori_Pow_MOI_file, ori_MAPs_subnational_file, PART)
 }
 ```
 
@@ -666,22 +664,23 @@ for (plotpid in setpid) {
   ## Save files in RDS format
   saveRDS(plot_tile_All_species_data, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.file_isolates_SpeciesData.rds"))
   saveRDS(plot_tile_All_species, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.species_only.TILE.rds"))
-
-  ## Save files in TIFF format
-  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_parDen.TILE.tiff"),
-  #        plot_bar_parDen_species_combine,
-  #        device="tiff", dpi=300,
-  #        width=5, height=8)
   
-  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_only.TILE.tiff"),
-  #        plot_tile_All_species,
-  #        device="tiff", dpi=300,
-  #        width=4, height=8)
+  ## Save files in TIFF format
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_parDen.TILE.tiff"),
+         plot_bar_parDen_species_combine,
+         device="tiff", dpi=300,
+         width=5, height=8)
+  
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_only.TILE.tiff"),
+         plot_tile_All_species,
+         device="tiff", dpi=300,
+         width=4, height=6)
   
   ##### Delete variables
   rm(file_isolates_field, file_isolates_dbs, file_isolates_field_orderIsolates, xlabs, plot_bar_parDen, plot_bar_hrp2, plot_tile_All_species, species_fold_diff_prev, plot_bar_parDen_species_combine, PART, PART_prev)
 }
 ```
+
 # PART 10.1.2 [FIELD]: Fisher Exact Test and combine with plot
 ```{r}
 PART=10
@@ -847,9 +846,13 @@ for (plotpid in setpid) {
   
   ## Order by countWBvol, repsize in 1uL, 10uL, 50uL, 100uL, isolate name)
   file_isolates_field_orderIsolates <- file_isolates_field %>%
-    select(Isolate, WBvol, NumTypes, ParasiteuL, paste0("found_min", repsize_thres_nonzero, "_code")) %>%
+    select(Isolate, WBvol, NumTypes, ParasiteuL, starts_with("DBS_"), starts_with("WB100_")) %>%
     pivot_wider(names_from=WBvol, values_from=NumTypes) %>%
-    arrange(desc(`1uL`), desc(`10uL`), desc(`50uL`), desc(`100uL`), Isolate)
+    arrange(desc(ParasiteuL),
+            desc(DBS_Pf), desc(WB100_Pf),
+            desc(DBS_Pm), desc(WB100_Pm),
+            desc(DBS_Po), desc(WB100_Po),
+            desc(DBS_Pv), desc(WB100_Pv))
   
   ##### Plot MOIs
   ## Merge MOI data (DBS, WBvol, PmMOI, PoMOI)
@@ -898,6 +901,7 @@ for (plotpid in setpid) {
   ## Plot tile of MOI (WB) - Pf only
   plot_tile_MOI_WB <- file_isolates_MOI %>%
     filter(Species == "Pf" & WBvol %in% WBvol_list) %>%
+    mutate(AgeGrp=factor(AgeGrp, levels=AgeGroups_list)) %>%
     ggplot(., aes(x=WBvol, y=Isolate, fill=as.numeric(MOI))) +
     geom_tile() +
     theme_bw() +
@@ -918,27 +922,25 @@ for (plotpid in setpid) {
           legend.key.height=unit(3.5, "cm")) +
     facet_grid(label_long~"pRBC", space="free", scale="free") +
     theme(strip.text=element_text(size=12))
-  
-  ## Add "NA" for DBS that was not varcoded
-  file_isolates_MOI_DBS_NA <- file_isolates_MOI %>%
-    filter(Species == "Pf") %>%
-    group_by(Isolate, AgeGrp) %>%
-    summarise(n=n()) %>%
-    filter(n < 5) %>%
-    mutate(WBvol = "DBS", MOI = NA) %>%
-    select(Isolate, WBvol, MOI, AgeGrp)
-    
+
   ## Join with other DBS dataset with MOI
+  file_isolates_MOI_age_label <- file_isolates_MOI %>%
+    select(Isolate, AgeGrp, label_long) %>%
+    unique()
+  
   file_isolates_MOI_DBS <- file_isolates_MOI %>%
     filter(Species == "Pf") %>%
-    select(Isolate, WBvol, MOI, AgeGrp) %>%
-    rbind(., file_isolates_MOI_DBS_NA) %>%
-    filter(WBvol == "DBS")
+    select(Isolate, WBvol, MOI) %>%
+    droplevels() %>%
+    complete(Isolate, WBvol) %>%
+    filter(WBvol == "DBS") %>%
+    left_join(., file_isolates_MOI_age_label, by=c("Isolate"))
   
   ## Set factors
   file_isolates_MOI_DBS$WBvol <- factor(file_isolates_MOI_DBS$WBvol, levels=c("DBS", WBvol_list))
   file_isolates_MOI_DBS$Isolate <- factor(file_isolates_MOI_DBS$Isolate, levels=file_isolates_field_orderIsolates$Isolate)
   file_isolates_MOI_DBS$AgeGrp <- factor(file_isolates_MOI_DBS$AgeGrp, levels=AgeGroups_list)
+  file_isolates_MOI$label_long <- factor(file_isolates_MOI$label_long, levels=xlabs$label_long)
   
   ## Plot tile of MOI (DBS) - Pf only
   plot_tile_MOI_DBS <- file_isolates_MOI_DBS %>%
@@ -958,7 +960,7 @@ for (plotpid in setpid) {
           axis.text.y=element_blank(),
           axis.text.x=element_text(size=11),
           legend.position="none") +
-    facet_grid(AgeGrp~"DBS", space="free", scale="free") +
+    facet_grid(label_long~"DBS", space="free", scale="free") +
     theme(strip.text.x=element_text(size=12),
           strip.text.y=element_blank())
   
@@ -973,15 +975,14 @@ for (plotpid in setpid) {
   saveRDS(plot_tile_MOI_combine, paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.species_PfMOI.TILE.rds"))
   
   ## Save files in TIFF format
-  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_PfMOI.TILE.tiff"),
-  #        plot_tile_MOI_combine,
-  #        device="tiff", dpi=300,
-  #        width=5, height=10)
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.species_PfMOI.TILE.tiff"),
+         plot_tile_MOI_combine,
+         device="tiff", dpi=300,
+         width=5, height=10)
   
   ##### Delete variables
   rm(file_isolates_field, file_isolates_dbs, file_isolates_field_orderIsolates, file_isolates_MOI, file_isolates_MOI_DBS_NA, file_isolates_MOI_DBS, plot_tile_MOI_WB, plot_tile_MOI_DBS, plot_tile_MOI_combine, xlabs, PART, PART_prev)
 }
-
 ```
 
 # PART 10.3 [FIELD]: Plot for metagenome analysis
@@ -1077,116 +1078,6 @@ for (plotpid in setpid) {
   
   ##### Delete variables
   rm(file_isolates_MOI, file_isolates_MOI_100, plot_bar_MOI_stack, plot_bar_MOI_fill, plot_bar_MOI_combine, xlabs, PART, PART_prev)
-}
-```
-
-# PART 10.4 [FIELD]: Statistics for metagenomic analysis
-```{r}
-PART=10
-PART_prev=PART-1
-
-for (plotpid in setpid) {
-  
-  ##### Read files
-  file_isolates_MOI_100 <- readRDS(paste0("Z02.FIELD.out_RDS/0", PART, ".id", plotpid, ".FIELD.file_isolates_MOI_WB100.rds"))
-  
-  ## keep only unique entries
-  file_isolates_MOI_100 <- file_isolates_MOI_100 %>%
-    ungroup() %>%
-    select(Isolate, sum_complexity, age, temp, sex_ML, village_ML, section_ML, hgb, occup) %>%
-    unique()
-  
-  ## test sex (Mann Whitney U)
-  stats_sex <- wilcox.test(sum_complexity ~ sex_ML, data = file_isolates_MOI_100, exact = FALSE, alternative="two.sided")
-  
-  ## test village (Mann Whitney U)
-  stats_village <- wilcox.test(sum_complexity ~ village_ML, data = file_isolates_MOI_100, exact = FALSE, alternative="two.sided")
-  
-  ## test hgb (Spearman's)
-  stats_hgb <- cor.test(x=file_isolates_MOI_100$hgb, y=file_isolates_MOI_100$sum_complexity, method = 'spearman', exact=FALSE, alternative="two.sided")
-  
-  ## test age (Spearman's)
-  stats_age2 <- cor.test(x=file_isolates_MOI_100$age, y=file_isolates_MOI_100$sum_complexity, method = 'spearman', exact=FALSE, alternative="two.sided")
-  
-  ## test temp (Spearman's)
-  stats_temp <- cor.test(x=as.numeric(file_isolates_MOI_100$temp), y=file_isolates_MOI_100$sum_complexity, method = 'spearman', exact=FALSE, alternative="two.sided")
-  
-  ## test occup (Kruskal-Wallis)
-  stats_occup <- kruskal.test(sum_complexity ~ occup, data=file_isolates_MOI_100)
-  
-  ## test section (Kruskal-Wallis)
-  stats_section <- kruskal.test(sum_complexity ~ section_ML, data=file_isolates_MOI_100)
-  
-  ## test EXTREME complexity vs sex (Fisher exact test) - extreme thres at 10
-  stats_sex_EXTREME_minMOI10 <- file_isolates_MOI_100 %>%
-    mutate(complexity=ifelse(sum_complexity >= 10, "high", "low")) %>%
-    select(complexity, sex_ML) %>%
-    table() %>%
-    fisher.test(., alternative="two.sided")
-  
-  stats_sex_EXTREME_minMOI9 <- file_isolates_MOI_100 %>%
-    mutate(complexity=ifelse(sum_complexity >= 9, "high", "low")) %>%
-    select(complexity, sex_ML) %>%
-    table() %>%
-    fisher.test(., alternative="two.sided")
-  
-  ## Combine stats
-  stats_complexity <- data.frame()
-  
-  for (variable in c("sex", "village")) {
-    
-    var_specific <- get(paste0("stats_", variable))
-    
-    stats_complexity <- data.frame(epi_param = variable) %>%
-      mutate(pval = var_specific$p.value) %>%
-      mutate(statistic = paste("W =", var_specific$statistic)) %>%
-      mutate(estimate = NA) %>%
-      mutate(stats_test = "Wilcoxon Rank Sum Test") %>%
-      rbind(stats_complexity, .)
-  }
-
-  for (variable in c("hgb", "age", "temp")) {
-    
-    var_specific <- get(paste0("stats_", variable))
-    
-    stats_complexity <- data.frame(epi_param = variable) %>%
-      mutate(pval = var_specific$p.value) %>%
-      mutate(statistic = paste("S =", var_specific$statistic)) %>%
-      mutate(estimate = paste("rho =", var_specific$estimate)) %>%
-      mutate(stats_test = "Spearman Rank Correlation Test") %>%
-      rbind(stats_complexity, .)
-  }
-  
-  for (variable in c("occup", "section")) {
-    
-    var_specific <- get(paste0("stats_", variable))
-    
-    stats_complexity <- data.frame(epi_param = variable) %>%
-      mutate(pval = var_specific$p.value) %>%
-      mutate(statistic = paste("KW chi squared =", var_specific$statistic)) %>%
-      mutate(estimate = NA) %>%
-      mutate(stats_test = "Kruskal-Wallis Rank Sum Test") %>%
-      rbind(stats_complexity, .)
-  }
-  
-  for (variable in c("sex_EXTREME_minMOI10", "sex_EXTREME_minMOI9")) {
-    
-    var_specific <- get(paste0("stats_", variable))
-    
-    stats_complexity <- data.frame(epi_param = variable) %>%
-      mutate(pval = var_specific$p.value) %>%
-      mutate(statistic = paste("95% CI =", var_specific$conf.int[1], "-", var_specific$conf.int[2])) %>%
-      mutate(estimate = paste("odds ratio =", var_specific$estimate)) %>%
-      mutate(stats_test = "Fisher's Exact Test") %>%
-      rbind(stats_complexity, .)
-  }
-  
-  ##### Save output
-  ## Save files in TXT format
-  write.table(stats_complexity, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.metagenomic_epiparam_stats.txt"), quote=FALSE, row.names=FALSE, sep="\t")
-  
-  ##### Delete variables
-  rm(file_isolates_MOI_100, stats_sex, stats_village, stats_hgb, stats_age, stats_temp, stats_occup, stats_section, stats_complexity, stats_sex_EXTREME_minMOI9, stats_sex_EXTREME_minMOI10, PART, PART_prev)
 }
 ```
 
@@ -1457,10 +1348,11 @@ for (plotpid in setpid) {
   ## Statistical test (Lin's concordance correlation coefficient)
   CCC_df_all <- data.frame()
   
-  for (pw_metric in c("Repertoire size", "Pf-MOI")) {
+  plot_list_combined <- list()
+  
+  for (pw_metric in c("Pf-MOI")) {
     
-    pw_metric_name <- case_when(pw_metric == "Repertoire size" ~ "repsize",
-                                pw_metric == "Pf-MOI" ~ "MOI")
+    pw_metric_name <- case_when(pw_metric == "Pf-MOI" ~ "MOI")
     
     file_isolates_field_metric <- file_isolates_field %>%
       filter(metric == pw_metric)
@@ -1534,32 +1426,53 @@ for (plotpid in setpid) {
     CCC_df_metric$label_long <- factor(CCC_df_metric$label_long, levels=xlabs$label_long)
     
     ## Plot
-    plot_scatter <- file_isolates_field_metric_pivot %>%
-      select(-Isolate) %>%
-      group_by(metric, volS_value, volB_value, volS_name, volB_name, label_long) %>%
-      summarise(pointsize=n()) %>%
-      ungroup() %>%
-      ggplot(., aes(x=volS_value, y=volB_value)) +
-      geom_point(aes(fill=volS_name, size=pointsize, alpha=volB_name), color="black", shape=21) +
-      geom_abline(intercept=0, slope=1, linewidth=0.5, linetype="dashed", color="black") +
-      geom_abline(data=CCC_df_metric, aes(intercept=alpha_val, slope=beta_val), color="black") +
-      geom_text(data=CCC_df_metric, aes(x=min(as.numeric(V1)), y=max(as.numeric(V2)), label=label_ccc), hjust=0) +
-      theme_bw() +
-      scale_x_continuous(name=bquote(.(pw_metric)[S]), breaks=scales::pretty_breaks(),
-                         limits=c(0,NA)) +
-      scale_y_continuous(name=bquote(.(pw_metric)[L]), breaks=scales::pretty_breaks(),
-                         limits=c(0,NA)) +
-      scale_size(name="Number of\nisolates") +
-      scale_fill_jco(name=expression(Vol[S])) +
-      scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
-      guides(alpha="none") +
-      theme(legend.position="top",
-            panel.grid=element_blank()) +
-      facet_wrap(.~label_long, nrow=2) +
-      theme(strip.text=element_text(size=12))
+    max_value <- max(c(file_isolates_field_metric_pivot$volS_value, file_isolates_field_metric_pivot$volB_value))
+
+    plot_list <- list()
+    
+    for (row in 1:nrow(WBvol_pairs_df)) {
+      pw_volS <- WBvol_pairs_df[row, "volS"]
+      pw_volB <- WBvol_pairs_df[row, "volB"]
+      pw_pair_label <- WBvol_pairs_df[row, "pairs"]
+    
+      ## Filter data for specific pairings
+      file_isolates_field_metric_pivot_tmp <- file_isolates_field_metric_pivot %>%
+        filter(label == pw_pair_label) %>%
+        select(-Isolate) %>%
+        group_by(metric, volS_value, volB_value, volS_name, volB_name, label_long) %>%
+        summarise(pointsize=n()) %>%
+        ungroup() 
       
-    ## Save plots as variable
-    assign(paste0("pw_plotScatter_", pw_metric_name), plot_scatter)
+      ## Filter CCC df for specific pairings
+      CCC_df_metric_tmp <- CCC_df_metric %>% filter(label == pw_pair_label)
+        
+      plot_scatter <- file_isolates_field_metric_pivot_tmp %>%
+        ggplot(., aes(x=volS_value, y=volB_value)) +
+        geom_point(aes(size=pointsize, alpha=0.8), fill="grey30", color="black", shape=21) +
+        geom_abline(intercept=0, slope=1, linewidth=0.5, linetype="dashed", color="black") +
+        geom_abline(data=CCC_df_metric_tmp, aes(intercept=alpha_val, slope=beta_val), color="black") +
+        geom_text(data=CCC_df_metric_tmp, aes(x=min(as.numeric(V1)), y=max(as.numeric(V2)), label=label_ccc), hjust=0) +
+        theme_bw() +
+        scale_x_continuous(name=bquote(.(pw_metric)[.(pw_volS)]), breaks=scales::pretty_breaks(),
+                           limits=c(0,max_value)) +
+        scale_y_continuous(name=bquote(.(pw_metric)[.(pw_volB)]), breaks=scales::pretty_breaks(),
+                           limits=c(0,max_value)) +
+        scale_size(name="Number of\nisolates") +
+        guides(alpha="none") +
+        theme(legend.position="top",
+              legend.text=element_text(size=12),
+              panel.grid=element_blank()) +
+        facet_wrap(.~label_long) +
+        theme(strip.text=element_text(size=12))
+      
+      ## Save individual plots to list
+      plot_list[[pw_pair_label]] <- plot_scatter
+    }
+    
+    plot_scatter_combined <- ggarrange(plotlist=plot_list, nrow=2, ncol=3, common.legend=TRUE)
+    
+    ## Save combined plots to list
+    plot_list_combined[[pw_metric]] <- plot_scatter_combined
   }
     
   ##### Save output
@@ -1569,9 +1482,9 @@ for (plotpid in setpid) {
   #        device="tiff", dpi=300,
   #        width=9, height=7)
   ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.MOI.SCATTER.tiff"),
-         pw_plotScatter_MOI,
+         plot_list_combined$`Pf-MOI`,
          device="tiff", dpi=300,
-         width=9, height=7)
+         width=10, height=7)
 
   ## Save files in TXT format
   write.table(CCC_df_all, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.CCC_values.txt"), quote=FALSE, row.names=FALSE, sep="\t")
@@ -1680,6 +1593,7 @@ for (plotpid in setpid) {
     scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
     guides(alpha="none") +
     theme(legend.position="top",
+          legend.text=element_text(size=12),
           panel.grid=element_blank())
   
   ## BoxPlot: PTS_Big-to-Small
@@ -1693,18 +1607,20 @@ for (plotpid in setpid) {
     scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
     guides(alpha="none") +
     theme(legend.position="top",
+          legend.text=element_text(size=12),
           panel.grid=element_blank())
   
   ## Scatter: Colored by found in smaller volume
   fig_PTS_scatter_VolS <- isolates_PTS_MOI %>%
     ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=stateA)) +
     geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
-    geom_point(color="black", shape=21) +
+    geom_point(color="black", shape=21, size=2) +
     theme_bw() +
     scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
     scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
     scale_fill_jco(name=expression(Vol[S])) +
     theme(legend.position="top",
+          legend.text=element_text(size=12),
           panel.grid=element_blank()) +
     facet_wrap(label_long~., nrow=2) +
     theme(strip.text=element_text(size=12))
@@ -1713,29 +1629,57 @@ for (plotpid in setpid) {
   fig_PTS_scatter_colParDen <- isolates_PTS_MOI %>%
     ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=ParasiteuL)) +
     geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
-    geom_point(color="black", shape=21) +
+    geom_point(color="black", shape=21, size=2) +
     theme_bw() +
     scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
     scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
-    scale_fill_gsea(name="Parasite density",
-                    trans = scales::log10_trans(),
-                    breaks = scales::trans_breaks("log10", function(x) 10^x) (c(1, 10^5)),
-                    labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    viridis::scale_fill_viridis(name="Parasite density",
+                                trans = scales::log10_trans(),
+                                breaks = scales::trans_breaks("log10", function(x) 10^x) (c(1, 10^5)),
+                                labels = scales::trans_format("log10", scales::math_format(10^.x))) +
     theme(legend.position="right",
+          legend.text=element_text(size=12),
           panel.grid=element_blank()) +
     facet_wrap(label_long~., nrow=2) +
     theme(strip.text=element_text(size=12))
+  
+  ## Scatter: Colored by Parasite density (parasite density by bins)
+  isolates_PTS_MOI_bin <- isolates_PTS_MOI %>%
+    mutate(ParasiteuL_bin = case_when(ParasiteuL == 0 ~ "0",
+                                      ParasiteuL >= 40 & ParasiteuL < 1000 ~ "40-999", ## Microscopy limit min at 40 parasites / uL
+                                      ParasiteuL >= 1000 & ParasiteuL < 10000 ~ "1,000-9,999",
+                                      ParasiteuL >= 10000 ~ "≥10,000")) %>%
+    mutate(ParasiteuL_bin = factor(ParasiteuL_bin, levels=c("0", "40-999", "1,000-9,999", "≥10,000")))
+    
+    fig_PTS_scatter_colParDen_bin <- isolates_PTS_MOI_bin %>%
+      ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=ParasiteuL)) +
+      geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
+      geom_point(color="black", shape=21, size=2) +
+      theme_bw() +
+      scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
+      scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
+      viridis::scale_fill_viridis(name="Parasite\ndensity",
+                                  trans = scales::log10_trans(),
+                                  breaks = scales::trans_breaks("log10", function(x) 10^x) (c(1, 10^5)),
+                                  labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+      theme(legend.position="right",
+            legend.text=element_text(size=12),
+            panel.grid=element_blank(),
+            axis.text.x=element_text(angle=45, vjust=0.9, hjust=0.9)) +
+      facet_wrap(ParasiteuL_bin ~ label_long, nrow=4) +
+      theme(strip.text=element_text(size=12))
   
   ## Scatter: Colored by Age group
   fig_PTS_scatter_colAgeGrp <- isolates_PTS_MOI %>%
     ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=AgeGrp)) +
     geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
-    geom_point(color="black", shape=21) +
+    geom_point(color="black", shape=21, size=2) +
     theme_bw() +
     scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
     scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
     scale_fill_startrek(name="Age Group") +
     theme(legend.position="right",
+          legend.text=element_text(size=12),
           panel.grid=element_blank()) +
     facet_wrap(label_long~., nrow=2) +
     theme(strip.text=element_text(size=12))
@@ -1744,12 +1688,13 @@ for (plotpid in setpid) {
   fig_PTS_scatter_colFoundMinCode <- isolates_PTS_MOI %>%
     ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=found_min_code)) +
     geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
-    geom_point(color="black", shape=21) +
+    geom_point(color="black", shape=21, size=2) +
     theme_bw() +
     scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
     scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
     scale_fill_startrek(name="Detected Permutations\n(1-10-50-100uL)") +
     theme(legend.position="top",
+          legend.text=element_text(size=12),
           panel.grid=element_blank()) +
     facet_wrap(label_long~., nrow=2) +
     theme(strip.text=element_text(size=12))
@@ -1760,13 +1705,14 @@ for (plotpid in setpid) {
     mutate(`Pf-MOI_B`=factor(ifelse(`Pf-MOI_B` >= 5, ">=5", `Pf-MOI_B`), levels=c(seq(1,4,1), ">=5"))) %>%
     ggplot(., aes(x=PTS_BtoA, y=PTS_AtoB, fill=label)) +
     geom_abline(intercept=0, slope=1, color="grey", linetype="dashed") +
-    geom_point(color="black", shape=21) +
+    geom_point(color="black", shape=21, size=2) +
     theme_bw() +
     scale_x_continuous(name=expression(PTS[L]), limits=c(0,1)) +
     scale_y_continuous(name=expression(PTS[S]), limits=c(0,1)) +
     scale_fill_startrek(name="") +
     facet_grid(`Pf-MOI_A`~`Pf-MOI_B`) +
     theme(strip.text=element_text(size=12),
+          legend.text=element_text(size=12),
           panel.grid=element_blank())
   
   ##### COMBINE FIGURES
@@ -1782,40 +1728,28 @@ for (plotpid in setpid) {
                                            fig_PTS_scatter_colAgeGrp,
                                     nrow=2, labels="AUTO", align="v")
   
-  ##### Save output
-  ## Save files in TIFF format
-  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_dist.BOX.tiff"),
-  #        fig_PTS_boxplots,
-  #        device="tiff", dpi=300,
-  #        width=12, height=6)
+  ##### Saving output
+  # ## Save files in TIFF format
   # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByAgeGrp.SCATTER.tiff"),
   #        fig_PTS_scatter_colAgeGrp,
   #        device="tiff", dpi=300,
   #        width=8, height=4)
-  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByVolS.SCATTER.tiff"),
-  #        fig_PTS_scatter_VolS,
+  ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByFoundMinCode.SCATTER.tiff"),
+         fig_PTS_scatter_colFoundMinCode,
+         device="tiff", dpi=300,
+         width=8, height=4)
+  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByParDensityBin.SCATTER.tiff"),
+  #        fig_PTS_scatter_colParDen_bin,
   #        device="tiff", dpi=300,
-  #        width=8, height=4)
-  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByFoundMinCode.SCATTER.tiff"),
-  #        fig_PTS_scatter_colFoundMinCode,
-  #        device="tiff", dpi=300,
-  #        width=8, height=4)
-  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByParDensity.SCATTER.tiff"),
-  #        fig_PTS_scatter_colParDen,
-  #        device="tiff", dpi=300,
-  #        width=8, height=4)
+  #        width=10, height=10)
   ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByParDensityAge.SCATTER.tiff"),
          fig_PTS_scatters_parden_age,
          device="tiff", dpi=300,
          width=9, height=10)
-  # ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByMOI.SCATTER.tiff"),
-  #        fig_PTS_scatter_facetMOI,
-  #        device="tiff", dpi=300,
-  #        width=14, height=12)
   ggsave(paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS_ColorByFoundMinCode.SCATTER_BOX.tiff"),
          fig_PTS_box_scatters,
          device="tiff", dpi=300,
-         width=11, height=12)
+         width=11, height=11)
   
   ## Save files in TXT format
   write.table(isolates_PTS_MOI, file=paste0("Z02.FIELD.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.PTS.txt"), quote=FALSE, row.names=FALSE, sep="\t")
@@ -1922,6 +1856,7 @@ for (plotpid in setpid) {
     scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
     guides(alpha="none") +
     theme(legend.position="top",
+          legend.text=element_text(size=12),
           panel.grid=element_blank()) +
     facet_wrap(.~diff_metric) +
     theme(strip.text=element_text(size=12))
@@ -1941,6 +1876,7 @@ for (plotpid in setpid) {
     scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
     guides(alpha="none") +
     theme(legend.position="top",
+          legend.text=element_text(size=12),
           panel.grid=element_blank()) +
     facet_wrap(.~diff_metric) +
     theme(strip.text=element_text(size=12))
@@ -1962,6 +1898,7 @@ for (plotpid in setpid) {
     scale_alpha_manual(values = c(0.6, 0.8, 1.0)) +
     guides(alpha="none") +
     theme(legend.position="top",
+          legend.text=element_text(size=12),
           panel.grid=element_blank(),
           axis.text.x=element_text(angle=90, vjust=0.5)) +
     facet_wrap(.~label_long, nrow=2) +
@@ -2015,6 +1952,7 @@ for (plotpid in setpid) {
     guides(alpha="none") +
     scale_size(name="Number of\nisolates") +
     theme(legend.position="top",
+          legend.text=element_text(size=12),
           panel.grid=element_blank(),
           axis.text.x=element_text(angle=90, vjust=0.5)) +
     facet_grid(AgeGrp~label_long) +
@@ -2145,7 +2083,8 @@ for (plotpid in setpid) {
     scale_x_discrete(name=bquote(.(pw_metric)[S])) +
     scale_y_discrete(name=bquote(.(pw_metric)[L])) +
     guides(size=guide_legend(title="Proportion")) +
-    theme(panel.grid=element_blank()) +
+    theme(legend.text=element_text(size=12),
+          panel.grid=element_blank()) +
     facet_wrap(.~label_long, nrow=1) +
     theme(strip.text=element_text(size=12))
   
@@ -2163,7 +2102,6 @@ for (plotpid in setpid) {
   rm(file_isolates_field, file_isolates_field_pivot, file_isolates_field_metric, isolates_diff_vol, isolates_onezero, pw_metric, pw_metric_name, row, pw_volS, pw_volB, pw_pair_label, df, df_factor, plot_scatter_onezero, xlabs, PART, PART_prev)
 }
 ```
-
 
 # PART 18 [FIELD] Power calculation based on proportion of MOI>1, by age and volume
 ```{r}
@@ -3258,7 +3196,7 @@ for (plotpid in setpid) {
     file_otutable_ups_t <- file_otutable_ups_t %>%
       data.frame() %>%
       right_join(., file_isolates_all, by=c("Samples"="IsolateID")) %>%
-      select(-c("Samples", "Isolate", "MID":"cpd_id_ML", "age":"found_min20_code")) %>%
+      select(-c("Samples", "Isolate", "MID":"village_ML", "age":"found_min20_code")) %>%
       select("WBvol", "AgeGrp", everything())
 
     ## Convert data to numeric
@@ -3376,9 +3314,6 @@ for (plotpid in setpid) {
   seqlist <-  data.frame(seq=file_otutable$DBLa_type)
   filtered_fasta <-  file_fasta[names(file_fasta) %in% seqlist$seq]
   
-  ## Get data for Jess - she needs parasitaemia data, including which are Pf only isolates
-  jess_df <- file_isolates_field %>% filter(WBvol == "100uL") %>% select(Isolate, Survey, MRS, study_id, AgeGrp, sex_ML, catchmentarea_ML, village_ML, rdt, HRP2_Conc, ParaGrp_SLIDE, ParasiteuL, starts_with("DBS_"), starts_with("WB100_"), PfMOI, PmMOI, PocMOI, PowMOI)
-  
   ##### Save files
   write.table(dt_field, file=paste0("Z05.DATA_OUTPUT_GITHUB/0", PART, ".id", plotpid, ".isolates_field_output.txt"), quote=FALSE, row.names=FALSE, sep="\t")
   
@@ -3390,10 +3325,8 @@ for (plotpid in setpid) {
   
   writeXStringSet(filtered_fasta, filepath=paste0("Z05.DATA_OUTPUT_GITHUB/0", PART, ".id", plotpid, ".centroids_output.fasta"))
   
-  write.csv(jess_df, file=paste0("Z04.POPULATION.out_RESULTS/0", PART, ".id", plotpid, ".FIELD.Jess_parasitaemia.csv"), quote=FALSE, row.names=FALSE)
-  
   ## Delete variables
-  rm(file_isolates_field, dt_field, dt_dbs, dt_repeat, jess_df, file_otutable, file_fasta, filtered_fasta)
+  rm(file_isolates_field, dt_field, dt_dbs, dt_repeat, file_otutable, file_fasta, filtered_fasta)
 }
 ```
 
@@ -3406,6 +3339,7 @@ PART_prev=PART-29
 
 ##### Read files
 file_MAPs_subnational_file <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".GADM_map_data.", file_prefix, ".rds"))
+file_MAPs_Bongo_file <- readRDS(paste0("Z01.MAIN.out_RDS/0", PART_prev, ".id", plotpid, ".MAPs_Bongo_data.", file_prefix, ".rds"))
 
 # Subset columns and get most recent data per country. Depending on your data, some of this
 # may not be relevant
@@ -3418,16 +3352,26 @@ MAPs_data_subset <- file_MAPs_subnational_file %>%
   mutate(AgeGrp="2-10") %>%
   mutate(MapType="Malaria Atlas (2-10yr)")
 
+# Add data for Pf in Bongo
+bongo_value <- file_MAPs_Bongo_file %>%
+  filter(Year=="2020") %>%
+  filter(Metric=="Infection Prevalence") %>%
+  select(Value)
+
+# Replace Upper East prevalence with Bongo prevalence
+MAPs_data_subset <- MAPs_data_subset %>%
+  mutate(Value=ifelse(`National Unit`=="Ghana" & Name=="Upper East" & Species == "Pf", bongo_value$Value, Value))
+
 # Add NA for Pm and Po due to absence of MAPs data
 MAPs_data_subset <- MAPs_data_subset %>%
-  filter(Name=="Upper East" & Species=="Pf") %>%
+  filter(Name %in% c("Bongo", "Upper East") & Species=="Pf") %>%
   mutate(Species=gsub("Pf", "Pm", Species)) %>%
   mutate(Value=NA) %>%
   rbind(MAPs_data_subset, .)
 
 # Add NA for Pm and Po due to absence of MAPs data
 MAPs_data_subset <- MAPs_data_subset %>%
-  filter(Name=="Upper East" & Species=="Pf") %>%
+  filter(Name %in% c("Bongo", "Upper East") & Species=="Pf") %>%
   mutate(Species=gsub("Pf", "Po", Species)) %>%
   mutate(Value=NA) %>%
   rbind(MAPs_data_subset, .)
@@ -3978,8 +3922,7 @@ for (plotpid in setpid) {
   isolates_diff_FC_nonzero <- readRDS(paste0("Z02.FIELD.out_RDS/", PART_prev, ".id", plotpid, ".FIELD.FC_dist.rds")) %>%
     filter(label=="1uL & 100uL" & diff_metric == "Pf-MOI")
   
-  S8_DBS_data <- read.csv("input_files/Ghana_Survey_Merged_Epi_MOI_S1_S10_131223.csv", header=TRUE) %>%
-    filter(Survey == 8) %>%
+  S8_DBS_data <- read.table("input_files/Ghana_MRS_Survey8_Epi_MOI_131223.txt", header=TRUE, sep="\t", check.names=FALSE) %>%
     filter(age >= 6)
   
   ## Count total number of isolates in Survey 8 aged (6+ Years)
@@ -4172,5 +4115,4 @@ for (plotpid in setpid) {
 ```{r}
 sessionInfo()
 ```
-
 
