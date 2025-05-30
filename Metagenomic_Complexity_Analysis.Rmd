@@ -1,0 +1,714 @@
+---
+title: "Code to analyse data for Metagenomic Complexity study"
+author: "Mun Hua Tan"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Date: 27/05/2025
+# Paper: Metagenomic complexity of high, seasonal transmission of Plasmodium spp. in asymptomatic carriers in Northern Sahelian Ghana.
+# Description: This code uses files from "data" folder to generate main figures in the paper
+
+# ENV: Load packages & create general lists/data frames
+```{r message=FALSE}
+library(tidyverse)
+library(ggpubr)
+library(rstatix)
+library(ggsci)
+library(mgcv)
+library(sf)
+library(wesanderson)
+library(ggrepel)
+
+ups_list <- list("upsA", "non-upsA")
+AgeGroups_list <- list("6-10 Years", "11-20 Years", "21-39 Years", "40+ Years")
+WBvol_list <- list("1uL", "10uL", "50uL", "100uL")
+
+WBvol_pairs_df <- data.frame(pairs=c("1uL & 10uL", "1uL & 50uL", "1uL & 100uL",
+                                     "10uL & 50uL", "10uL & 100uL", "50uL & 100uL"),
+                             volS=c("1uL", "1uL", "1uL", "10uL", "10uL", "50uL"),
+                             volB=c("10uL", "50uL", "100uL", "50uL", "100uL", "100uL"),
+                             volS_label=c("WB1", "WB1", "WB1", "WB10", "WB10", "WB50"),
+                             volB_label=c("WB10", "WB50", "WB100", "WB50", "WB100", "WB100"))
+
+##Repertoire size threshold
+repsize_thres_nonzero <- 1 # 1 DBLa type
+repsize_thres_popgen <- 20 # 20 DBLa types
+
+## Function: read data tables
+read_table_in <- function(x) {
+  x <- read.table(x, sep="\t", header=TRUE, check.names=FALSE)
+} 
+```
+
+## Unzip some files
+```{bash}
+unzip data/gadm41_GHA_shp.zip -d data/
+gunzip -c1 data/S8_DBS_pRBC_Repeats_OtuTable.txt.gz > data/S8_DBS_pRBC_Repeats_OtuTable.txt
+```
+
+## Figure 2
+```{r}
+## Load input file
+isolates_field_pRBC <- read_table_in("data/S8_pRBC_Field_IsolateMetadata.txt")
+
+## Arrange isolates for heatmap ordering: sorting by parasite density, then species detections by volume
+isolates_field_pRBC_orderIsolates <- isolates_field_pRBC %>%
+  select(Isolate, Source, NumTypes, ParasiteuL, starts_with("DBS_"), starts_with("WB100_")) %>%
+  pivot_wider(names_from=Source, values_from=NumTypes) %>%
+  arrange(desc(ParasiteuL),
+          desc(DBS_Pf), desc(WB100_Pf),
+          desc(DBS_Pm), desc(WB100_Pm),
+          desc(DBS_Po), desc(WB100_Po),
+          desc(DBS_Pv), desc(WB100_Pv))
+
+## Set factor levels
+isolates_field_pRBC <- isolates_field_pRBC %>% 
+  mutate(Source=factor(Source, levels=WBvol_list),
+         Isolate=factor(Isolate, levels=isolates_field_pRBC_orderIsolates$Isolate),
+         AgeGrp=factor(AgeGrp, levels=AgeGroups_list))
+
+## Create long-form labels for Age Groups with counts
+xlabs <- isolates_field_pRBC %>%
+  select(Isolate, AgeGrp) %>%
+  distinct() %>%
+  count(AgeGrp) %>%
+  mutate(label_long = paste0(AgeGrp, "\n(n=", n, ")"))
+
+## Join long labels to main data
+isolates_field_pRBC <- isolates_field_pRBC %>%
+  left_join(xlabs, by="AgeGrp") %>%
+  mutate(label_long=factor(label_long, levels=xlabs$label_long)) # Set factor levels
+
+## Prepare data for tile plot of species detection
+plot_tile_data <- isolates_field_pRBC %>%
+  select(Isolate, starts_with("DBS_"), starts_with("WB100_"), AgeGrp, label_long) %>%
+  distinct() %>%
+  pivot_longer(-c(Isolate, AgeGrp, label_long), names_to="Source", values_to="value") %>%
+  mutate(value=ifelse(value == 0, NA, value),
+         Source=str_replace(Source, "WB100_", "100uL_"),
+         Source=str_replace(Source, "DBS_", "DBS_")) %>%
+  separate(Source, into=c("Source", "Species"), sep="_") %>%
+  mutate(Source=factor(Source, levels=c("DBS", "100uL")),
+         Isolate=factor(Isolate, levels=isolates_field_pRBC_orderIsolates$Isolate)) %>%
+  filter(Species != "Pv")
+
+## Create tile plot
+plot_tile_All_species <- ggplot(plot_tile_data, aes(x=Source, y=Isolate, fill=Species)) +
+  geom_tile(color="white", aes(alpha=value)) +
+  scale_fill_manual(name="Species", values=c("#548B54", "#79CDCD", "#8B3E2F", "black")) +
+  scale_alpha(range=c(1, 1), na.value=0) +
+  scale_x_discrete(name="Source") +
+  scale_y_discrete(name="Isolate") +
+  facet_grid(label_long~Species, space="free", scales="free") +
+  theme_bw() +
+  theme(panel.grid=element_blank(),
+        axis.title=element_text(size=11),
+        axis.text.x=element_text(size=11),
+        axis.text.y=element_blank(),
+        legend.position="none",
+        strip.text=element_text(size = 11))
+
+## Figure 2
+# Save as image (tiff)
+ggsave("Figure2.tiff", plot_tile_All_species,
+       device="tiff", dpi=300, width=4, height=6)
+
+# Display
+plot_tile_All_species
+```
+
+## Figure 3, panel a
+```{r}
+## Load input file
+isolates_field_pRBC <- read_table_in("data/S8_pRBC_Field_IsolateMetadata.txt")
+isolates_field_DBS  <- read_table_in("data/S8_DBS_Field_IsolateMetadata.txt")
+
+## Arrange isolates for heatmap ordering: sorting by parasite density, then species detections by volume
+isolates_field_pRBC_orderIsolates <- isolates_field_pRBC %>%
+  select(Isolate, Source, NumTypes, ParasiteuL, starts_with("DBS_"), starts_with("WB100_")) %>%
+  pivot_wider(names_from=Source, values_from=NumTypes) %>%
+  arrange(desc(ParasiteuL),
+          desc(DBS_Pf), desc(WB100_Pf),
+          desc(DBS_Pm), desc(WB100_Pm),
+          desc(DBS_Po), desc(WB100_Po),
+          desc(DBS_Pv), desc(WB100_Pv))
+
+## Extract MOI per species for all species
+species_list <- c("Pf", "Pm", "Poc", "Pow")
+
+file_isolates_MOI <- map_dfr(species_list, function(sp) {
+  moi_col <- paste0(sp, "MOI")
+    
+  # WB data
+  field_data <- isolates_field_pRBC %>%
+    select(Isolate, Source, AgeGrp, NumTypes, MOI=.data[[moi_col]]) %>%
+    mutate(Species=sp)
+  
+  # DBS data
+  dbs_data <- isolates_field_DBS %>%
+    filter(Isolate %in% isolates_field_pRBC_orderIsolates$Isolate) %>%
+    select(Isolate, Source, AgeGrp, NumTypes, MOI=.data[[moi_col]]) %>%
+    mutate(Species=sp)
+  
+  bind_rows(field_data, dbs_data)
+})
+
+## Include only MOI > 0 (i.e. remove MOI = 0)
+file_isolates_MOI <- file_isolates_MOI %>% filter(MOI > 0)
+
+## Set factor levels
+file_isolates_MOI <- file_isolates_MOI %>%
+  mutate(Source=factor(Source, levels=c("DBS", WBvol_list)),
+         Isolate=factor(Isolate, levels=isolates_field_pRBC_orderIsolates$Isolate),
+         AgeGrp=factor(AgeGrp, levels=AgeGroups_list))
+
+## Create long-form labels for Age Groups with counts for P. falciparum
+xlabs <- file_isolates_MOI %>%
+  filter(Species == "Pf" & Source %in% WBvol_list) %>%
+  select(Isolate, AgeGrp) %>%
+  distinct() %>%
+  count(AgeGrp) %>%
+  mutate(label_long=paste0(AgeGrp, "\n(n=", n, ")"))
+
+## Join long labels to main data
+file_isolates_MOI <- file_isolates_MOI %>%
+  left_join(xlabs, by="AgeGrp") %>%
+  mutate(label_long=factor(label_long, levels=xlabs$label_long)) # Set factor levels
+
+## Get max MOI for scale limits
+max_MOI <- max(file_isolates_MOI$MOI, na.rm = TRUE)
+
+## Create MOI tile plot (WB, for only Pf)
+plot_tile_MOI_WB <- file_isolates_MOI %>%
+  filter(Species == "Pf", Source %in% WBvol_list) %>%
+  ggplot(., aes(x=Source, y=Isolate, fill=as.numeric(MOI))) +
+  geom_tile() +
+  scale_fill_viridis_c(name="Pf-MOI", option="inferno", na.value="white",
+                       limits=c(1, max_MOI), breaks=seq(1, max_MOI, 1),
+                       values=c(0, 0.2, 1), direction=-1, begin=0.15, end=1.0) +
+  scale_x_discrete(name="Volume") +
+  scale_y_discrete(name="Isolate") +
+  facet_grid(label_long~"pRBC", space="free", scale="free") +
+  theme_bw() +
+  theme(panel.grid=element_blank(),
+    axis.text.y=element_blank(),
+    strip.text=element_text(size=12),
+    legend.key.height=unit(3.5, "cm"),
+    legend.position="right")
+
+## Create MOI tile plot (DBS, for only Pf)
+# Get isolate-label mapping (before filtering)
+isolate_labels <- file_isolates_MOI %>%
+  filter(Species == "Pf") %>%
+  select(Isolate, label_long) %>%
+  distinct()
+
+# Get complete only Isolate and Source, then join back label_long
+file_isolates_MOI_DBS <- file_isolates_MOI %>%
+  filter(Species == "Pf", Source == "DBS") %>%
+  select(Isolate, Source, MOI) %>%
+  complete(Isolate=levels(file_isolates_MOI$Isolate), Source="DBS") %>%
+  inner_join(isolate_labels, by="Isolate") %>%
+  mutate(Source=factor(Source, levels=c("DBS", WBvol_list)),
+         Isolate=factor(Isolate, levels=levels(file_isolates_MOI$Isolate)),
+         label_long=factor(label_long, levels=levels(file_isolates_MOI$label_long)))
+
+plot_tile_MOI_DBS <- ggplot(file_isolates_MOI_DBS, aes(x=Source, y=Isolate, fill=as.numeric(MOI))) +
+  geom_tile() +
+  scale_fill_viridis_c(name="Pf-MOI", option="inferno", na.value="grey80",
+                       limits=c(1, max_MOI), breaks=seq(1, max_MOI, 1),
+                       values=c(0, 0.2, 1), direction=-1, begin=0.15, end=1.0) +
+  scale_x_discrete(name="Source") +
+  scale_y_discrete(name="Isolate") +
+  facet_grid(label_long~"DBS", space="free", scale="free") +
+  theme_bw() +
+  theme(panel.grid=element_blank(),
+        axis.text.y=element_blank(),
+        axis.title.x=element_blank(),
+        legend.position="none",
+        strip.text.x=element_text(size=12),
+        strip.text.y=element_blank())
+
+## Combine WB and DBS plots
+plot_tile_MOI_combine <- ggarrange(plot_tile_MOI_DBS, plot_tile_MOI_WB, nrow=1, align="h", widths=c(0.25, 1))
+
+## Figure 3a
+# Display
+plot_tile_MOI_combine
+```
+
+## Figure 3, panel b
+```{r}
+## Load input file
+isolates_field_pRBC <- read_table_in("data/S8_pRBC_Field_IsolateMetadata.txt")
+
+## Include only isolates with found_min1_code Y-Y-Y-Y
+found_min_code <- paste0("found_min", repsize_thres_nonzero, "_code")
+isolates_field_pRBC <- isolates_field_pRBC %>% filter(.data[[found_min_code]] == "Y-Y-Y-Y")
+  
+## Extract info
+isolates_field_pRBC <- isolates_field_pRBC %>%
+  select(Isolate, Source, PfMOI) %>%
+  pivot_longer(-c(Isolate, Source), names_to="metric") %>%
+  mutate(metric=gsub("PfMOI", "Pf-MOI", metric)) %>%
+  mutate(Source=factor(Source, levels=WBvol_list))
+  
+## Statistical test
+kw_pval_all <- data.frame()
+
+pw_metric <- "Pf-MOI"
+pw_metric_name <- "MOI"
+  
+file_isolates_field_metric <- isolates_field_pRBC %>% filter(metric == pw_metric)
+   
+# Shapiro test for normality
+shapiro_norm <- file_isolates_field_metric %>% shapiro_test(value)
+
+# Statistical test (Friedman test)
+friedman_nstats <- file_isolates_field_metric %>% friedman_test(value ~ Source | Isolate)
+
+# Statistical test (Wilcoxon paired test with holm correction)
+kw_pval <- file_isolates_field_metric %>%
+  pairwise_wilcox_test(value ~ Source,
+                       paired=TRUE,
+                       p.adjust.method="holm",
+                       alternative="two.sided",
+                       comparisons=list(c("1uL", "10uL"), c("1uL", "50uL"), c("1uL", "100uL"),
+                                        c("10uL", "50uL"), c("10uL", "100uL"), c("50uL", "100uL"))) %>% 
+  add_xy_position(x="Source", step.increase=0.05) %>%
+  mutate(metric=pw_metric) %>%
+  mutate(alternative="none")
+  
+# Save
+kw_pval_all <- rbind(kw_pval_all, kw_pval)
+
+## Plot boxplots
+## Create long-form labels
+xlabs <- file_isolates_field_metric %>%
+  select(Isolate, Source) %>%
+  distinct() %>%
+  count(Source) %>%
+  mutate(label_long=paste0(Source, "\n(n=", n, ")"))
+
+# Create boxplots
+plot_paired_boxplot <- file_isolates_field_metric %>%
+  ggboxplot(., x="Source", y="value", id="Isolate",
+           line.color="gray", fill="Source",  line.size=0.4, line.type=NA, add="jitter") +
+  scale_fill_jco(name="Volume") +
+  stat_pvalue_manual(kw_pval, xmin="group1", xmax="group2", label="p.adj.signif", hide.ns=TRUE, tip.length=0, vjust=0.9) +
+  labs(subtitle = get_test_label(friedman_nstats, detailed=TRUE)) +
+  theme_bw() +
+  scale_x_discrete(name="Volume", labels=xlabs$label_long) +
+  scale_y_continuous(name=pw_metric, breaks=scales::pretty_breaks(10), limits=c(0,NA)) +
+  theme(legend.text=element_text(size=12),
+        panel.grid=element_blank(),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14)) +
+  facet_wrap(metric~., scales="free") +
+  theme(strip.text=element_text(size=12))
+
+## Figure 3b
+# Display
+plot_paired_boxplot
+```
+
+## Figure 3, panel c
+```{r}
+## Load input file
+isolates_diff_FD <- read_table_in("data/id96.FIELD.fold_diff.txt")
+
+## Filter for 1ul & 100uL comparisons specific to Pf-MOI
+isolates_diff_FD <- isolates_diff_FD %>% filter(label == "1uL & 100uL" & diff_metric == "Pf-MOI")
+
+## GAM model
+# Fit GAM model with maximum k based on unique sample volume values
+k_max <- n_distinct(isolates_diff_FD$volS_value)
+gam_model <- gam(diff_value ~ s(volS_value, k=k_max), data=isolates_diff_FD, method="REML")
+
+# Add GAM predictions to the data
+isolates_diff_FD <- isolates_diff_FD %>% mutate(gam_pred=predict(gam_model, newdata=.))
+
+## Create scatter plot
+# Prepare data for plotting only 1uL vs 100uL
+plot_data <- isolates_diff_FD %>%
+  filter(diff_metric == "Pf-MOI" & volS_name == "1uL" & volB_name == "100uL") %>%
+  group_by(volS_name, volB_name, volS_value, diff_value, label_long) %>%
+  summarise(pointsize = n(), .groups = "drop")
+
+# Create scatter plot
+plot_scatter_FD_MOI_1vs100_model <- ggplot(plot_data, aes(x=volS_value, y=diff_value)) +
+  geom_hline(yintercept=2^0, linetype="dashed", color="red", size=0.5) +
+  geom_point(aes(fill=volS_name, size=pointsize), color="black", shape=21) +
+  geom_line(data=isolates_diff_FD, aes(x=volS_value, y=gam_pred), color="darkgreen", size=0.7) +
+  scale_x_continuous(name=expression(Pf-MOI[S]), breaks=scales::pretty_breaks(10), limits=c(0, NA)) +
+  scale_y_continuous(name="Fold Difference", trans=scales::log2_trans(),
+                     breaks=scales::trans_breaks("log2", function(x) 2^x),
+                     labels=scales::trans_format("log2", scales::math_format(2^.x))) +
+  scale_fill_jco(name=expression(Vol[S])) +
+  scale_size(name="Number of\nisolates") +
+  facet_wrap(~label_long, nrow = 2) +
+  theme_bw() +
+  theme(panel.grid= element_blank(),
+        legend.position="right",
+        legend.text=element_text(size=12),
+        axis.text= element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.text.x=element_text(angle=90, vjust=0.5),
+        strip.text=element_text(size=12))
+
+## Figure 3c
+# Display
+plot_scatter_FD_MOI_1vs100_model
+
+```
+
+## Figure 3, panel d
+```{r}
+## Load input file
+isolates_field_pRBC <- read_table_in("data/S8_pRBC_Field_IsolateMetadata.txt")
+otutable <- read_table_in("data/S8_DBS_pRBC_Repeats_OtuTable.txt")
+
+## Filter isolates with >= 20 DBLa types
+isolates_field_pRBC <- isolates_field_pRBC %>% filter(NumTypes >= repsize_thres_popgen)
+
+## Summarise number of isolates per blood volume
+isolates_field_pRBC_summary <- isolates_field_pRBC %>%
+  count(Source, name="num_isolates") %>%
+  mutate(AgeGrp="Total") %>%
+  relocate(., AgeGrp, .before=num_isolates)
+
+## Summarise DBLa richness per blood volume
+info_DBLa_richness <- map_dfr(WBvol_list, function(vol) {
+  
+  # Filter isolates for current volume
+  isolates_field_pRBC_vol <- isolates_field_pRBC %>% 
+    filter(Source == vol)
+  
+  # Subset OTU table and calculate DBLa frequencies
+  otutable_vol <- otutable %>%
+    select("DBLa_type":"upsA_nonA", all_of(isolates_field_pRBC_vol$IsolateID)) %>%
+    mutate(dbla_freq = rowSums(across(all_of(isolates_field_pRBC_vol$IsolateID)))) %>%
+    relocate(dbla_freq, .after = "upsA_nonA") %>%
+    filter(dbla_freq > 0)
+  
+  # Summarise DBLa richness by upsA/nonA classification
+  otutable_vol %>%
+    count(upsA_nonA, name="num_dbla") %>%
+    mutate(prop_dbla=num_dbla/sum(num_dbla),
+           Source=vol)
+})
+
+## Set factors
+isolates_field_pRBC_summary <- isolates_field_pRBC_summary %>%
+  mutate(Source=factor(Source, levels=WBvol_list),
+         AgeGrp=factor(AgeGrp, levels=c("Total", AgeGroups_list)))
+
+info_DBLa_richness <- info_DBLa_richness %>%
+  mutate(Source=factor(Source, levels=WBvol_list),
+         upsA_nonA=factor(upsA_nonA, levels=ups_list))
+
+## Create barplot and line plot for DBLa richness and number of isolates per blood volume
+# Get coefficient to scale for secondary axis
+coeff <- 50
+
+# Plot number of isolates & DBLa richness
+plot_numIsolates_richness <- ggplot(info_DBLa_richness, aes(x=Source, y=num_dbla)) +
+  geom_bar(stat="identity") +
+  geom_point(filter(isolates_field_pRBC_summary, AgeGrp=="Total"), mapping=aes(x=Source, y=num_isolates*coeff)) +
+  geom_line(filter(isolates_field_pRBC_summary, AgeGrp=="Total"), mapping=aes(x=Source, y=num_isolates*coeff, group=1)) +
+  scale_y_continuous(name=expression(paste("DBL", alpha, " type richness")),
+                     sec.axis=sec_axis(~./coeff, name="Number of isolates"),
+                     breaks=scales::pretty_breaks(10)) +
+  scale_x_discrete(name="Volume") +
+  theme_bw() +
+  theme(legend.title=element_blank(),
+        legend.text=element_text(size=12),
+        panel.grid=element_blank(),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14))
+
+## Figure 3d
+# Display
+plot_numIsolates_richness
+
+```
+
+## Figure 3, panel e
+```{r}
+## Load input file
+isolates_field_pRBC <- read_table_in("data/S8_pRBC_Field_IsolateMetadata.txt")
+field_PTS <- read_table_in("data/id96.FIELD_POP.PTS.txt")
+
+## Filter isolates with >= 20 DBLa types
+isolates_field_pRBC <- isolates_field_pRBC %>% filter(NumTypes >= repsize_thres_popgen)
+
+## Set factor levels
+isolates_field_pRBC$Source <- factor(isolates_field_pRBC$Source, levels=WBvol_list)
+field_PTS$label <- factor(field_PTS$label, levels=WBvol_list)
+
+## Create long-form labels for blood volume with counts
+xlabs <- isolates_field_pRBC
+xlabs <- paste(levels(xlabs$Source),"\n(n=",table(xlabs$Source),")",sep="")
+  
+## Statistical test (Kruskal-Wallis + Dunn multiple test with holm correction)
+stats_pval_kw <- field_PTS %>%
+  kruskal_test(PTS_score ~ label) %>%
+  mutate(Test="Kruskal-Wallis")
+
+stats_pval_dunn <- field_PTS %>%
+  dunn_test(PTS_score ~ label, p.adjust.method="holm", detailed=TRUE) %>%
+  mutate(Test="Dunn's test") %>%
+  add_xy_position(x="label", step.increase=0.1)
+
+## Get summary
+field_PTS_summary <- field_PTS %>%
+  group_by(label) %>%
+  summarise(min=min(PTS_score),
+            max=max(PTS_score),
+            mean=mean(PTS_score),
+            median=median(PTS_score),
+            Q1=quantile(PTS_score, probs=0.25),
+            Q3=quantile(PTS_score, probs=0.75),
+            .groups = "drop")
+
+## Plot PTS
+plot_PTS_AB <- ggplot(field_PTS, aes(x=label, y=PTS_score)) +
+  geom_violin(aes(fill=label)) +
+  geom_boxplot(width=0.1) +
+  stat_pvalue_manual(stats_pval_dunn, xmin="group1", xmax="group2", label="p.adj.signif", hide.ns=TRUE, tip.length=0, vjust=0.7) +
+  # labs(fill="Volume") +
+  scale_x_discrete(name="Volume", labels=xlabs) +
+  scale_y_continuous(name="PTS", breaks=scales::pretty_breaks(10), limits=c(0,1)) +
+  scale_fill_jco(name="") +
+  theme_bw() +
+  theme(legend.position="right",
+        legend.text=element_text(size=12),
+        panel.grid=element_blank(),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14))
+  
+## Figure 3e
+# Display
+plot_PTS_AB
+
+```
+
+## Figure 3 composite
+```{r}
+coeff <- 50
+  
+## PLOTS
+plot1 <- plot_tile_MOI_combine
+plot2 <- plot_paired_boxplot
+plot3 <- plot_scatter_FD_MOI_1vs100_model
+plot4 <- plot_numIsolates_richness
+plot5 <- plot_PTS_AB
+
+## PLOT LAYOUT
+combine1 <- ggarrange(plot2, NA, plot3, ncol=1, labels=c("b", "", "c"), heights=c(1, 0.02, 0.8))
+combine2 <- ggarrange(plot4, NA, plot5, nrow=1, labels=c("d", "", "e"), widths=c(0.9, 0.02, 1))
+combine1_3 <- ggarrange(plot1, NA, combine1, nrow=1, widths=c(0.9, 0.02, 1), labels=c("a", "", ""))
+combine_all <- ggarrange(combine1_3, NA, combine2, ncol=1, heights=c(1, 0.01, 0.5))
+
+## Figure 3
+# Save as image (tiff)
+ggsave(paste0("Figure3.tiff"),
+         combine_all,
+         device="tiff", dpi=300,
+         width=10, height=12)
+# Display
+combine_all
+```
+
+## Figure 4
+```{r}
+## Prepare data for isolates with WBvol = 100uL with MOI > 0
+file_isolates_MOI_100 <- file_isolates_MOI %>%
+  select(-label_long) %>%
+  filter(Source == WBvol_list[4] & !is.na(MOI)) %>%
+  group_by(Isolate) %>%
+  mutate(sum_complexity=sum(MOI), # Sum MOI to get metagenomic complexity
+         n_species=n()) %>% # Add count of species
+  ungroup() %>%
+  arrange(sum_complexity, n_species) %>% # Order by increasing number of species and complexity
+  mutate(Isolate) %>%
+  mutate(Isolate=factor(Isolate, levels=unique(Isolate)), # Set factor levels
+         AgeGrp=factor(AgeGrp, levels=AgeGroups_list))
+
+## Create long-form labels for Age Group with counts
+xlabs <- file_isolates_MOI_100 %>%
+  select(Isolate, AgeGrp) %>%
+  distinct() %>%
+  count(AgeGrp) %>%
+  mutate(label_long = paste0(AgeGrp, "\n(n=", n, ")")) %>%
+  select(-n)
+
+## Join long-form labels to main data
+file_isolates_MOI_100 <- file_isolates_MOI_100 %>%
+  left_join(xlabs, by="AgeGrp") %>%
+  mutate(label_long = factor(label_long, levels = xlabs$label_long)) # Set factor levels
+
+## Create barplot - stacked barplot of raw MOI counts
+plot_bar_MOI_stack <- ggplot(file_isolates_MOI_100, aes(x=Isolate, y=as.numeric(MOI), fill=Species)) +
+  geom_bar(stat="identity", position="stack") +
+  scale_x_discrete(name="Isolate") +
+  scale_y_continuous("Metagenomic Complexity") +
+  scale_fill_manual(name="Species", values=c("#548B54", "#79CDCD", "#8B3E2F", "black")) + # Darker & Ligher mix aesthetic
+  facet_grid(.~label_long, space="free", scale="free") +
+  theme_bw() +
+  theme(panel.grid=element_blank(),
+        axis.text.x=element_blank(),
+        legend.position="top",
+        strip.text=element_text(size=12))
+
+## Create barplot - proportional barplot of MOI
+plot_bar_MOI_fill <- ggplot(file_isolates_MOI_100, aes(x=Isolate, y=as.numeric(MOI), fill=Species)) +
+  geom_bar(stat="identity", position="fill") +
+  scale_x_discrete(name="Isolate") +
+  scale_y_continuous("Proportion of Complexity") +
+  scale_fill_manual(name="Species", values=c("#548B54", "#79CDCD", "#8B3E2F", "black")) + # Darker & Ligher mix aesthetic
+  facet_grid(.~label_long, space="free", scale="free") +
+  theme_bw() +
+  theme(panel.grid=element_blank(),
+        axis.text.x=element_blank(),
+        legend.position="none",
+        strip.text=element_text(size=12))
+
+##COMBINE FIGURES
+plot_bar_MOI_combine <- ggarrange(plot_bar_MOI_stack, plot_bar_MOI_fill,
+                                  nrow=2, align="v", heights=c(1, 0.9), labels=c("a", "b"))
+
+## Figure 4
+# Save as image (tiff)
+ggsave("Figure4.tiff", plot_bar_MOI_combine,
+       device="tiff", dpi=300, width=10, height=7)
+# Display
+plot_bar_MOI_combine
+```
+
+## Figure 5
+```{r}
+## Download shapefile for Ghana from website: https://gadm.org/download_country.html
+# Load the GADM shapefile
+ghana_gadm_sf <- st_read("data/gadm41_GHA_shp")
+
+# Check the names of the regions
+unique(ghana_gadm_sf$NAME_1)
+
+## Ghana Map
+# Combine geometries to get region-level centroids
+ghana_regions_combined <- ghana_gadm_sf %>%
+  group_by(NAME_1) %>% # Group by region name (adjust column name if different)
+  summarize(geometry = st_union(geometry)) # Combine geometries within each region
+
+ghana_centroid_data <- st_centroid(ghana_regions_combined) %>% # Calculate centroids for each combined region geometry
+  st_coordinates() %>% # Extract coordinates of the centroids
+  as.data.frame() %>%
+  mutate(region=ghana_regions_combined$NAME_1) %>% # Adjust column name if needed
+  rename(lon=X, lat=Y)
+
+## Bongo Map
+# Combine geometries to get district-level centroids for Bongo
+bongo_centroid_data <- st_centroid(ghana_gadm_sf) %>% # Calculate centroids for each district
+  st_coordinates() %>% # Extract coordinates of the centroids
+  as.data.frame() %>%
+  mutate(district=ghana_gadm_sf$NAME_2, # Adjust this to match the district column name
+         region=ghana_gadm_sf$NAME_1) %>% # Region name, if needed
+  rename(lon=X, lat=Y)
+
+## Load prevalence data
+MAPs_data_subset <- read_table_in("data/MAPS_prevalence_data.txt") %>%
+  select(AgeGrp, Species, Country=`National Unit`, Region=Name, Prevalence=Value, MapType) 
+
+S8MRS_prevalence_data <- read_table_in("data/S8MRS_DBS_Bongo_prevalence_data.txt") %>%
+  select(AgeGrp, Species, Country, District, Prevalence, MapType)
+
+##COMBINE DATA
+# Join MAPs data to region-level map
+MAPs_data_sf <- ghana_gadm_sf %>%
+  left_join(MAPs_data_subset, by=c("COUNTRY"="Country", "NAME_1"="Region"))
+
+# Join S8 DBS data to district-level map & add other regions with prevalence=NA
+maptypes_list <- c("Survey DBS (2-10yr)", "Survey DBS (all ages)", "Survey DBS (all ages) - adjusted for deep sampling")
+
+bongo_data_sf <- ghana_gadm_sf %>%
+  left_join(S8MRS_prevalence_data, by=c("COUNTRY"="Country", "NAME_2"="District")) %>%
+  filter(NAME_2 == "Bongo")
+
+non_bongo_data_sf <- map_dfr(maptypes_list, function(sub) {
+  MAPs_data_sf %>%
+    filter(NAME_2 != "Bongo") %>%
+    filter(Species != "(Pm|Po)") %>%
+    mutate(MapType=sub) %>%
+    mutate(Prevalence=NA)
+})
+
+# Combine Bongo data and the synthetic non-Bongo rows
+bongo_data_sf_full <- bind_rows(bongo_data_sf, non_bongo_data_sf)
+
+# Combine all map data
+merged_data_ALL <- rbind(MAPs_data_sf, bongo_data_sf_full)
+
+## Set factor levels
+merged_data_ALL$MapType <- factor(merged_data_ALL$MapType, levels=c("Malaria Atlas (2-10yr)", "Survey DBS (2-10yr)", "Survey DBS (all ages)", "Survey DBS (all ages) - adjusted for deep sampling"))
+
+## Set Color scale
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+
+ghana_min <- 0
+ghana_max <- merged_data_ALL$Prevalence %>% na.omit() %>% max()
+
+## GHANA MAP
+# Plot map - Ghana (Pf only)
+bongo_coords <- data.frame(district="Bongo", lat=10.9090167, lon=-0.8079772)
+
+map_ghana <- merged_data_ALL %>%
+  filter(MapType=="Malaria Atlas (2-10yr)" & Species=="Pf") %>%
+  ggplot() +
+  geom_sf(aes(fill=Prevalence), colour="white") +
+  geom_text(data=ghana_centroid_data, aes(x=lon, y=lat, label=region), size=3, color="black") +  # Add labels
+  geom_label_repel(data=bongo_coords, aes(x=lon, y=lat, label=district), label.padding=0.35, point.padding=0.1, size=3, nudge_y=0.5, nudge_x=0.1) +
+  ggtitle(expression("MAP: " * italic("P. falciparum") * " Infection Prevalence by region in Ghana (2-10yr)")) +
+  scale_fill_gradientn(name="Prevalence", colours=pal, limits=c(ghana_min, ghana_max)) + 
+  theme_pubr() +
+  theme(legend.position="right",
+        legend.title=element_text(size=11),
+        axis.text=element_text(size=11),
+        plot.title = element_text(size=12),
+        strip.text = element_text(size=12))
+
+## BONGO MAP
+# Plot map - Bongo with bordering regions
+merged_data_ALL_Bongo <- merged_data_ALL %>%
+  mutate(Species=recode(Species, Pf="P. falciparum", Pm="P. malariae", Po="P. ovale spp."),
+         Prevalence=ifelse(NAME_2=="Bongo", Prevalence, NA))
+
+map_bongo <- ggplot(merged_data_ALL_Bongo) +
+  geom_sf(aes(fill=Prevalence), colour="grey50") +
+  coord_sf(xlim=c(-1, -0.6), ylim=c(10.8, 11.01)) +
+  geom_text(data=filter(merged_data_ALL_Bongo, NAME_2=="Bongo"), aes(x=-0.7937153, y=10.92294, label=format(Prevalence, digits=3))) +
+  scale_fill_gradientn(name="Prevalence", colours=pal, limits=c(ghana_min, ghana_max), na.value="white") + 
+  ggtitle(expression(italic("Plasmodium") * " spp. Infection Prevalence (%) in Bongo, Ghana")) +
+  facet_grid(MapType~Species, switch="y", labeller=label_wrap_gen(width=16, multi_line=TRUE)) +
+  theme_bw() +
+  theme(legend.position="none",
+        panel.grid=element_blank(),
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        axis.ticks=element_blank(),
+        plot.title = element_text(size=12),
+        strip.text.y.left=element_text(angle=0),
+        strip.text = element_text(size=12))
+
+## Combine Ghana and Bongo maps
+ghana_bongo_combine_maps <- ggarrange(map_ghana, map_bongo, nrow=1, widths=c(2,2.6))
+  
+## Figure 5
+# Save as image (tiff)
+ggsave("Figure5.tiff", ghana_bongo_combine_maps,
+       device="tiff", dpi=300, width=11, height=6)
+# Display
+ghana_bongo_combine_maps
+```

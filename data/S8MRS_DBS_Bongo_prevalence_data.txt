@@ -1,0 +1,10 @@
+AgeGrp	Species	value	n	Prevalence	Country	District	MapType
+2-10	Pf	PCR +	186	34.6368715083799	Ghana	Bongo	Survey DBS (2-10yr)
+2-10	Pm	PCR +	21	3.91061452513966	Ghana	Bongo	Survey DBS (2-10yr)
+2-10	Po	PCR +	8	1.48975791433892	Ghana	Bongo	Survey DBS (2-10yr)
+All	Pf	PCR +	896	49.5301271420674	Ghana	Bongo	Survey DBS (all ages)
+All	Pm	PCR +	133	7.35212824765064	Ghana	Bongo	Survey DBS (all ages)
+All	Po	PCR +	47	2.59812050856827	Ghana	Bongo	Survey DBS (all ages)
+All	Pf	PCR +	896	65.5684540261655	Ghana	Bongo	Survey DBS (all ages) - adjusted for deep sampling
+All	Pm	PCR +	133	14.1791044776119	Ghana	Bongo	Survey DBS (all ages) - adjusted for deep sampling
+All	Po	PCR +	47	6.49530127142067	Ghana	Bongo	Survey DBS (all ages) - adjusted for deep sampling
