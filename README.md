@@ -6,6 +6,9 @@ Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Ras
 https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 <br></br>
 
+gadm41_GHA_shp.zip: Shapefile for Ghana needs to be downloaded from https://gadm.org/download_country.html
+
+
 #### pRBC_varcoding_primerSeqs.txt
 Primer sequences used for amplifying DBLα tags included forward barcoded primers and an unbarcoded reverse primer. Both forward and reverse primers also contain Illumina Nextera overhangs to facilitate subsequent preparation of sequencing libraries.
 
@@ -75,5 +78,3 @@ Infection prevalence (PfPr2-10) for Ghana from the Malaria Atlas Project
 #### S8MRS_DBS_Bongo_prevalence_data.txt
 Parasite prevalence in Bongo District calculated based on different levels of datasets: (1) Survey DBS from host 2-10yr, (2) Survey DBS from all ages, (3) Survey DBS from all ages and adjusted for deep sampling with 100μL pRBC
 
-#### gadm41_GHA_shp.zip
-Shapefile for Ghana downloaded from https://gadm.org/download_country.html
