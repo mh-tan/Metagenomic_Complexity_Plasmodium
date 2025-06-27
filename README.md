@@ -9,7 +9,7 @@ https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 gadm41_GHA_shp.zip: Shapefile for Ghana needs to be downloaded from https://gadm.org/download_country.html
 <br></br>
 
-#### * pRBC_varcoding_primerSeqs.txt
+#### pRBC_varcoding_primerSeqs.txt
 Primer sequences used for amplifying DBLα tags included forward barcoded primers and an unbarcoded reverse primer. Both forward and reverse primers also contain Illumina Nextera overhangs to facilitate subsequent preparation of sequencing libraries.
 
 #### PilotS1toS8_DBS_pRBC.id96.DBLaTypes.fasta.gz
