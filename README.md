@@ -2,14 +2,24 @@
 
 Description of files available in the 'data' folder. If you use data or code from this work, please cite:
 
-Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Rasyidi, F., Pascual, M., Ansah, P.O. and Day, K.P., 2025. Metagenomic analysis reveals extreme complexity of Plasmodium spp. infections in high transmission in West Africa. medRxiv, pp.2025-04.
+Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Rasyidi, F., Pascual, M., Ansah, P.O. and Day, K.P. 2025. Metagenomic analysis reveals extreme complexity of *Plasmodium* spp. infections in high transmission in West Africa. medRxiv, pp.2025-04.
 https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 <br></br>
+
+If you use *var* DBLα primers and the *var*coding approach, please cite the following:
+
+Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Rasyidi, F., Pascual, M., Ansah, P.O. and Day, K.P. 2025. Metagenomic analysis reveals extreme complexity of *Plasmodium* spp. infections in high transmission in West Africa. medRxiv, pp.2025-04.
+https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
+
+Tiedje, K.E., Zhan, Q., Ruybal-Pésantez, S., Tonkin-Hill, G., He, Q., Tan, M.H., Argyropoulos, D.C., Deed, S.L., Ghansah, A., Bangre, O., Oduro, A.R., Koram, K.A., Pascual, M., Day, K.P. 2023. Measuring changes in *Plasmodium falciparum* census population size in response to sequential malaria control interventions. eLife 12:RP91411
+https://doi.org/10.7554/eLife.91411.2
+
+=====
 
 gadm41_GHA_shp.zip: Shapefile for Ghana needs to be downloaded from https://gadm.org/download_country.html
 <br></br>
 
-#### primers/pRBC_varcoding_primerSeqs.txt
+#### pRBC_varcoding_primerSeqs.txt
 Primer sequences used for amplifying DBLα tags included forward barcoded primers and an unbarcoded reverse primer. Both forward and reverse primers also contain Illumina Nextera overhangs to facilitate subsequent preparation of sequencing libraries.
 
 #### data/PilotS1toS8_DBS_pRBC.id96.DBLaTypes.fasta.gz
