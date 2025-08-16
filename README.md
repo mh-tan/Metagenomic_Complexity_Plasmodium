@@ -19,7 +19,7 @@ https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 
 ## Data files
 
-The [Metagenomic_Complexity_Analysis.Rmd](https://github.com/mh-tan/Metagenomic_Complexity_Plasmodium/blob/main/Metagenomic_Complexity_Analysis.Rmd) R script generates main figures in this paper. It uses input files in the 'data' folder and also requires the shapefile for Ghana to be downloaded.
+The [Metagenomic_Complexity_Analysis.Rmd](https://github.com/mh-tan/Metagenomic_Complexity_Plasmodium/blob/main/Metagenomic_Complexity_Analysis.Rmd) R code generates main figures in this paper. It uses input files in the 'data' folder and also requires the shapefile for Ghana to be downloaded.
 
 gadm41_GHA_shp.zip: Shapefile for Ghana needs to be downloaded from https://gadm.org/download_country.html
 <br></br>
