@@ -6,17 +6,18 @@ Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Ras
 https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 <br></br>
 
-=====
+## Genotyping Protocols used in this study:
 
-Protocols used in this study:
+- Species-specific 18S rRNA PCR: [SpeciesSpecific_18S_rRNA_PCR](https://github.com/UniMelb-Day-Lab/SpeciesSpecific_18S_rRNA_PCR)
 
-Species-specific 18S rRNA PCR: https://github.com/UniMelb-Day-Lab/SpeciesSpecific_18S_rRNA_PCR
-*P. falciparum var* DBLα PCR: https://github.com/UniMelb-Day-Lab/Pfalciparum_varDBLalpha_PCR
-- **Note:** This study used version 2 (v2) of primers
-*P. malariae* microsatellite PCR: https://github.com/UniMelb-Day-Lab/Pmalariae_Microsat_PCR
-*P. ovale* spp. *potra* PCR: https://github.com/UniMelb-Day-Lab/Povale_potra_PCR
+- *P. falciparum var* DBLα PCR: [Pfalciparum_varDBLalpha_PCR](https://github.com/UniMelb-Day-Lab/Pfalciparum_varDBLalpha_PCR) - **Note:** This study used version 2 (v2) of primers
+  
+- *P. malariae* microsatellite PCR: [Pmalariae_Microsat_PCR](https://github.com/UniMelb-Day-Lab/Pmalariae_Microsat_PCR)
 
-=====
+- *P. ovale* spp. *potra* PCR: [Povale_potra_PCR](https://github.com/UniMelb-Day-Lab/Povale_potra_PCR)
+<br></br>
+
+## Data files
 
 gadm41_GHA_shp.zip: Shapefile for Ghana needs to be downloaded from https://gadm.org/download_country.html
 <br></br>
