@@ -1,6 +1,6 @@
 # Metagenomic_Complexity_Plasmodium
 
-Description of files available in the 'data' folder. If you use data or code from this work, please cite:
+If you use data or code from this work, please cite:
 
 Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Rasyidi, F., Pascual, M., Ansah, P.O. and Day, K.P. 2025. Metagenomic analysis reveals extreme complexity of *Plasmodium* spp. infections in high transmission in West Africa. medRxiv, pp.2025-04.
 https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
@@ -19,8 +19,12 @@ https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 
 ## Data files
 
+The [Metagenomic_Complexity_Analysis.Rmd](https://github.com/mh-tan/Metagenomic_Complexity_Plasmodium/blob/main/Metagenomic_Complexity_Analysis.Rmd) R script generates main figures in this paper. It uses input files in the 'data' folder and also requires the shapefile for Ghana to be downloaded.
+
 gadm41_GHA_shp.zip: Shapefile for Ghana needs to be downloaded from https://gadm.org/download_country.html
 <br></br>
+
+### Description of files available in the 'data' folder. 
 
 #### pRBC_varcoding_primerSeqs.txt
 Primer sequences used for amplifying DBLα tags included forward barcoded primers and an unbarcoded reverse primer. Both forward and reverse primers also contain Illumina Nextera overhangs to facilitate subsequent preparation of sequencing libraries.
