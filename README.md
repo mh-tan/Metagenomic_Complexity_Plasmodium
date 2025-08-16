@@ -1,4 +1,4 @@
-# Metagenomic_Complexity_Plasmodium
+# Metagenomic Complexity of *Plasmodium* spp. Malaria Infections in Asymptomatic Carriers in Northern Ghana
 
 If you use data or code from this work, please cite:
 
