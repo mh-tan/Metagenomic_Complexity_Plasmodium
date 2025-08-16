@@ -6,13 +6,15 @@ Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Ras
 https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 <br></br>
 
-If you use *var* DBLα primers and the *var*coding approach, please cite the following:
+=====
 
-Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Rasyidi, F., Pascual, M., Ansah, P.O. and Day, K.P. 2025. Metagenomic analysis reveals extreme complexity of *Plasmodium* spp. infections in high transmission in West Africa. medRxiv, pp.2025-04.
-https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
+Protocols used in this study:
 
-Tiedje, K.E., Zhan, Q., Ruybal-Pésantez, S., Tonkin-Hill, G., He, Q., Tan, M.H., Argyropoulos, D.C., Deed, S.L., Ghansah, A., Bangre, O., Oduro, A.R., Koram, K.A., Pascual, M., Day, K.P. 2023. Measuring changes in *Plasmodium falciparum* census population size in response to sequential malaria control interventions. eLife 12:RP91411
-https://doi.org/10.7554/eLife.91411.2
+Species-specific 18S rRNA PCR: https://github.com/UniMelb-Day-Lab/SpeciesSpecific_18S_rRNA_PCR
+*P. falciparum var* DBLα PCR: https://github.com/UniMelb-Day-Lab/Pfalciparum_varDBLalpha_PCR
+- **Note:** This study used version 2 (v2) of primers
+*P. malariae* microsatellite PCR: https://github.com/UniMelb-Day-Lab/Pmalariae_Microsat_PCR
+*P. ovale* spp. *potra* PCR: https://github.com/UniMelb-Day-Lab/Povale_potra_PCR
 
 =====
 
