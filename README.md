@@ -2,6 +2,8 @@
 
 If you use data or code from this work, please cite:
 
+Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Rasyidi, F., Pascual, M., Ansah, P.O., and Day, K.P. (2025). Metagenomic complexity of high, seasonal transmission of *Plasmodium* spp. in asymptomatic carriers in Northern Sahelian Ghana. *Commun. Med.* doi:[10.1038/s43856-025-01088-y](https://doi.org/10.1038/s43856-025-01088-y)
+
 Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Rasyidi, F., Pascual, M., Ansah, P.O. and Day, K.P. 2025. Metagenomic analysis reveals extreme complexity of *Plasmodium* spp. infections in high transmission in West Africa. medRxiv, pp.2025-04.
 https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 <br></br>
