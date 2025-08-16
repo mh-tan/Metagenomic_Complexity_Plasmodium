@@ -6,7 +6,7 @@ Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Ras
 https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 <br></br>
 
-## Genotyping Protocols used in this study:
+## Genotyping Protocols used in this study
 
 - Species-specific *18S rRNA* PCR: [SpeciesSpecific_18S_rRNA_PCR](https://github.com/UniMelb-Day-Lab/SpeciesSpecific_18S_rRNA_PCR)
 
