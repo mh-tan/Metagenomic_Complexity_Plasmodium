@@ -10,7 +10,8 @@ https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 
 - Species-specific *18S rRNA* PCR: [SpeciesSpecific_18S_rRNA_PCR](https://github.com/UniMelb-Day-Lab/SpeciesSpecific_18S_rRNA_PCR)
 
-- *P. falciparum var* DBLα PCR: [Pfalciparum_varDBLalpha_PCR](https://github.com/UniMelb-Day-Lab/Pfalciparum_varDBLalpha_PCR) - **Note:** This study used version 2 (v2) of primers
+- *P. falciparum var* DBLα PCR: [Pfalciparum_varDBLalpha_PCR](https://github.com/UniMelb-Day-Lab/Pfalciparum_varDBLalpha_PCR)
+  - **Note:** This study used version 2 (v2) of primers. Primer sequences used for amplifying DBLα tags included forward barcoded primers and an unbarcoded reverse primer. Both forward and reverse primers also contain Illumina Nextera overhangs to facilitate subsequent preparation of sequencing libraries.
   
 - *P. malariae* microsatellite PCR: [Pmalariae_Microsat_PCR](https://github.com/UniMelb-Day-Lab/Pmalariae_Microsat_PCR)
 
@@ -26,16 +27,13 @@ gadm41_GHA_shp.zip: Shapefile for Ghana needs to be downloaded from https://gadm
 
 ### Description of files available in the 'data' folder. 
 
-#### pRBC_varcoding_primerSeqs.txt
-Primer sequences used for amplifying DBLα tags included forward barcoded primers and an unbarcoded reverse primer. Both forward and reverse primers also contain Illumina Nextera overhangs to facilitate subsequent preparation of sequencing libraries.
-
-#### data/PilotS1toS8_DBS_pRBC.id96.DBLaTypes.fasta.gz
+#### PilotS1toS8_DBS_pRBC.id96.DBLaTypes.fasta.gz
 *P. falciparum* DBLα type sequences generated from post-clusterDBLa.
 
-#### data/S8_DBS_pRBC_Repeats_OtuTable.txt.gz
+#### S8_DBS_pRBC_Repeats_OtuTable.txt.gz
 Matrix detailing presence/absence of each DBLα type in isolates.
 
-#### data/S8_pRBC_Field_IsolateMetadata.txt, S8_DBS_Field_IsolateMetadata.txt, S8_pRBC_Repeats_IsolateMetadata.txt
+#### S8_pRBC_Field_IsolateMetadata.txt, S8_DBS_Field_IsolateMetadata.txt, S8_pRBC_Repeats_IsolateMetadata.txt
 Contains general isolate metadata, outcomes of species-specific PCR based on 18S rRNA for DBS and 100μL pRBC samples, and MOI estimated based on various assays.
 - **Isolate**: General identifier of isolate
 - **IsolateID**: Identifier of isolate, including details on pRBC volume, repeat number (if any), MID barcode, and pool number
@@ -54,7 +52,7 @@ Contains general isolate metadata, outcomes of species-specific PCR based on 18S
 - **found_min1_code**: A code to represent *P. falciparum* detection in the four pRBC volumes for the isolate, where >= 1 DBLα type was detected in the isolate (N-Y-Y-Y: undetected in 1μL pRBC but detected in 10, 50, and 100μL pRBC)
 - **found_min20_code**: A code to represent *P. falciparum* detection in the four pRBC volumes for the isolate, where >= 20 DBLα types were detected in the isolate (N-N-Y-Y: undetected in 1 and 10μL pRBC but detected in 50 and 100μL pRBC)
 
-#### data/id96.FIELD.fold_diff.txt
+#### id96.FIELD.fold_diff.txt
 Contains estimation of fold difference in Pf-MOI between pairwise pRBC volumes
 - **Isolate**: General identifier of isolate
 - **volS_name**: States the smaller pRBC volume in the pairwise comparison
@@ -66,7 +64,7 @@ Contains estimation of fold difference in Pf-MOI between pairwise pRBC volumes
 - **diff_value**: Fold difference in Pf-MOI (i.e. volB_value/volS_value)
 - **label_long**: Longer label of the pairwise comparison for visualisation
 
-#### data/id96.FIELD.PTS.txt
+#### id96.FIELD.PTS.txt
 Contains estimation of genetic similarity between pairwise pRBC volumes for a same isolate, based on pairwise type sharing (PTS)
 - **Isolate**: General identifier of isolate
 - **stateA**: States the smaller pRBC volume in the pairwise comparison
@@ -82,16 +80,16 @@ Contains estimation of genetic similarity between pairwise pRBC volumes for a sa
 - **found_min_code**: A code to represent *P. falciparum* detection in the four pRBC volumes for the isolate, where >= 20 DBLα types were detected in the isolate (N-N-Y-Y: undetected in 1 and 10μL pRBC but detected in 50 and 100μL pRBC)
 - **label_long**: Longer label of the pairwise comparison for visualisation
 
-#### data/id96.FIELD_POP.PTS.txt
+#### id96.FIELD_POP.PTS.txt
 Contains population-level genetic similarity among isolates, based on pairwise type sharing (PTS)
 - **IsolateID1**: Identifier of isolate, including details on pRBC volume, repeat number (if any), MID barcode, and pool number
 - **IsolateID2**: Identifier of isolate, including details on pRBC volume, repeat number (if any), MID barcode, and pool number
 - **PTS_score**: PTS, with sum of repertoire size of SampleID1 and SampleID2 as the denominator (PTS = number of shared DBLα types / (SampleID1 repertoire size + SampleID2 repertoire size))
 - **label**: The pRBC volume for which the population estimation was performed
 
-#### data/MAPS_prevalence_data.txt
+#### MAPS_prevalence_data.txt
 Infection prevalence (PfPr2-10) for Ghana from the Malaria Atlas Project
 
-#### data/S8MRS_DBS_Bongo_prevalence_data.txt
+#### S8MRS_DBS_Bongo_prevalence_data.txt
 Parasite prevalence in Bongo District calculated based on different levels of datasets: (1) Survey DBS from host 2-10yr, (2) Survey DBS from all ages, (3) Survey DBS from all ages and adjusted for deep sampling with 100μL pRBC
 
