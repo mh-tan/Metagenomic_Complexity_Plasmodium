@@ -11,7 +11,7 @@ https://www.medrxiv.org/content/10.1101/2025.04.29.25326533v1
 - Species-specific *18S rRNA* PCR: [SpeciesSpecific_18S_rRNA_PCR](https://github.com/UniMelb-Day-Lab/SpeciesSpecific_18S_rRNA_PCR)
 
 - *P. falciparum var* DBLα PCR: [Pfalciparum_varDBLalpha_PCR](https://github.com/UniMelb-Day-Lab/Pfalciparum_varDBLalpha_PCR)
-  - **Note:** This study used version 2 (v2) of primers. Primer sequences used for amplifying DBLα tags included forward barcoded primers and an unbarcoded reverse primer. Both forward and reverse primers also contain Illumina Nextera overhangs to facilitate subsequent preparation of sequencing libraries.
+  - **Note:** This study used version 2 (v2) of primers. Primer sequences used for amplifying DBLα tags included barcoded forward primers and an unbarcoded reverse primer. Both forward and reverse primers also contain Illumina Nextera overhangs to facilitate subsequent preparation of sequencing libraries.
   
 - *P. malariae* microsatellite PCR: [Pmalariae_Microsat_PCR](https://github.com/UniMelb-Day-Lab/Pmalariae_Microsat_PCR)
 
