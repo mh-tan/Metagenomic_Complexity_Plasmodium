@@ -3,8 +3,9 @@
 If you use data or code from this work, please cite:
 
 Tan, M.H., Bangre, O., Rios-Teran, C.A., Tiedje, K.E., Deed, S.L., Zhan, Q., Rasyidi, F., Pascual, M., Ansah, P.O., and Day, K.P. (2025). Metagenomic complexity of high, seasonal transmission of *Plasmodium* spp. in asymptomatic carriers in Northern Sahelian Ghana. *Commun. Med.* doi:[10.1038/s43856-025-01088-y](https://doi.org/10.1038/s43856-025-01088-y)
+<br></br>
 
-This paper was published as part of the Health in Africa collection. In addition, we’ve written a *Behind the Paper* blog post providing further insights into the motivations behind our study, available [HERE](https://communities.springernature.com/posts/microbe-hunting-in-high-transmission-how-complex-are-malaria-infections-in-asymptomatic-carriers-in-northern-ghana).
+This paper is part of the **Health in Africa** collection. To learn more about the motivations and context behind our study, read our Behind the Paper blog post [here](https://communities.springernature.com/posts/microbe-hunting-in-high-transmission-how-complex-are-malaria-infections-in-asymptomatic-carriers-in-northern-ghana).
 <br></br>
 
 ## Genotyping Protocols used in this study
